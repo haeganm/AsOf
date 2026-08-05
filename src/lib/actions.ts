@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { nextAssumptionIds } from "./assumptions";
 import { ensurePortfolio, getDb, newId, nowIso } from "./db";
+import { syncPrices } from "./ingest/prices";
+import { getSecurity } from "./ingest/securities";
 import { getThesisAt } from "./queries";
 import type { Assumption, DecisionType } from "./types";
 import { DECISION_TYPES } from "./types";
@@ -147,11 +149,16 @@ export async function createPosition(fd: FormData) {
   // backdated record was backdated.
   const written = nowIso();
 
+  // A CIK is only trusted if it matches the cached universe entry for this
+  // ticker, so a hand-edited query string cannot attach the wrong company.
+  const security = getSecurity(ticker);
+  const cik = security?.cik ?? null;
+
   db.transaction(() => {
     db.prepare(
-      `insert into positions (id,portfolioId,ticker,name,assetClass,status,openedAt,closedAt,createdAt)
-       values (?,?,?,?,?,?,?,null,?)`
-    ).run(positionId, portfolio, ticker, name, assetClass, kind, kind === "open" ? at : null, at);
+      `insert into positions (id,portfolioId,ticker,name,assetClass,status,openedAt,closedAt,createdAt,cik,demo)
+       values (?,?,?,?,?,?,?,null,?,?,0)`
+    ).run(positionId, portfolio, ticker, name, assetClass, kind, kind === "open" ? at : null, at, cik);
 
     if (kind === "open" && shares > 0 && price > 0) {
       db.prepare(
@@ -222,6 +229,15 @@ export async function createPosition(fd: FormData) {
       ).run(newId("pb"), positionId, beliefId, null, "high", at, written);
     }
   })();
+
+  // Real price history, fetched in the background. Deliberately after the
+  // transaction and deliberately swallowed: a network failure must not lose the
+  // position the user just wrote, and the manual mark above already renders.
+  try {
+    await syncPrices(positionId, ticker);
+  } catch {
+    // Recorded in ingest_runs; the position stands on the mark that was entered.
+  }
 
   refresh();
   redirect(`/positions/${positionId}`);

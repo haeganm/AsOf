@@ -133,7 +133,7 @@ export default async function DecisionPage({ params }: { params: Promise<{ id: s
                     rows={5}
                     placeholder="Be specific about whether the reasoning held, separately from whether the price cooperated."
                   />
-                  <button type="submit" className="btn btn-solid">
+                  <button type="submit" data-primary-submit className="btn btn-solid">
                     Record the outcome
                   </button>
                 </div>

@@ -242,7 +242,9 @@ export function SubmitBar({
 }) {
   return (
     <div className="sticky bottom-0 -mx-6 mt-10 flex flex-wrap items-center gap-4 border-t border-rule bg-paper/95 px-6 py-4 backdrop-blur sm:-mx-10 sm:px-10">
-      <button type="submit" className="btn btn-solid">
+      {/* data-primary-submit marks the form's real action, so a secondary form on
+          the page (search, filters) is never mistaken for it. */}
+      <button type="submit" data-primary-submit className="btn btn-solid">
         {label}
       </button>
       <Link href={cancelHref} className="btn btn-quiet">

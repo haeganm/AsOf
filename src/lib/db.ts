@@ -23,7 +23,9 @@ create table if not exists positions (
   status text not null,
   openedAt text,
   closedAt text,
-  createdAt text not null
+  createdAt text not null,
+  cik text,
+  demo integer not null default 0
 );
 
 create table if not exists lots (
@@ -153,6 +155,28 @@ create table if not exists postmortems (
   createdAt text not null
 );
 
+-- The investable universe, cached from SEC's published ticker file so symbol
+-- lookup works offline and every position can carry a CIK for filings.
+create table if not exists securities (
+  ticker text primary key,
+  cik text,
+  name text not null,
+  exchange text,
+  kind text,
+  updatedAt text not null
+);
+
+-- One row per ingestion attempt, so a silent failure is still visible.
+create table if not exists ingest_runs (
+  id text primary key,
+  source text not null,
+  target text,
+  startedAt text not null,
+  finishedAt text,
+  ok integer,
+  note text
+);
+
 create table if not exists replay_attempts (
   id text primary key,
   decisionId text not null,
@@ -192,6 +216,13 @@ const ADDED_COLUMNS: Array<[string, string, string]> = [
   ["position_beliefs", "occurredAt", "text not null default '1970-01-01T00:00:00.000Z'"],
   ["position_beliefs", "createdAt", "text not null default '1970-01-01T00:00:00.000Z'"],
   ["event_beliefs", "occurredAt", "text not null default '1970-01-01T00:00:00.000Z'"],
+  ["positions", "cik", "text"],
+  // Sample positions carry an internally-consistent fictional price path. Mixing
+  // real closes into it would put a $62 fill next to a real $110 mark on the same
+  // day, so ingestion skips them.
+  ["positions", "demo", "integer not null default 0"],
+  // Distinguishes a price you typed from one that was fetched.
+  ["marks", "source", "text not null default 'manual'"],
 ];
 
 function migrate(db: Database.Database) {

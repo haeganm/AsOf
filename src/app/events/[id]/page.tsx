@@ -289,7 +289,7 @@ export default async function EventPage({ params }: { params: Promise<{ id: stri
                   rows={4}
                   hint="The observation you would want to be handed the next time an event like this comes round."
                 />
-                <button type="submit" className="btn btn-solid">
+                <button type="submit" data-primary-submit className="btn btn-solid">
                   Record the outcome
                 </button>
               </div>

@@ -12,8 +12,14 @@ import {
   todayValue,
 } from "@/components/forms";
 import { PageHeader } from "@/components/ui";
+import { TickerPicker } from "@/components/ticker-picker";
 
-export default function NewPositionPage() {
+export default async function NewPositionPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ q?: string; ticker?: string; name?: string; cik?: string }>;
+}) {
+  const sp = await searchParams;
   const beliefs = listBeliefs();
 
   return (
@@ -23,6 +29,12 @@ export default function NewPositionPage() {
         title="Write the bet down before you take it"
         lede="Start with the sentence you would say out loud. The structure below exists to make that sentence checkable later — not to be filled in for its own sake. Only the summary and a ticker are required; everything else can be added as you learn it."
       />
+
+      {/* Outside the main form on purpose: a form nested inside another form is
+          invalid HTML, and browsers submit the wrong one. */}
+      <div className="mb-10 max-w-[860px]">
+        <TickerPicker q={sp.q ?? ""} selected={sp.ticker ?? null} basePath="/positions/new" />
+      </div>
 
       <form action={createPosition} className="max-w-[860px]">
         <FormBlock label="The bet" title="One sentence you would defend to a sceptical colleague.">
@@ -53,11 +65,24 @@ export default function NewPositionPage() {
 
         <FormBlock
           label="Instrument"
-          title="Illustrative marks — AsOf has no market feed, so the price you enter is the price it knows."
+          title="Pick a real security, or type one in. Either way the price you enter is the opening mark."
         >
+          <input type="hidden" name="cik" value={sp.cik ?? ""} />
           <Row cols={3}>
-            <TextField label="Ticker" name="ticker" required placeholder="NVDA" />
-            <TextField label="Name" name="name" required placeholder="NVIDIA Corporation" />
+            <TextField
+              label="Ticker"
+              name="ticker"
+              required
+              placeholder="NVDA"
+              defaultValue={sp.ticker ?? ""}
+            />
+            <TextField
+              label="Name"
+              name="name"
+              required
+              placeholder="NVIDIA Corporation"
+              defaultValue={sp.name ?? ""}
+            />
             <TextField label="Asset class" name="assetClass" placeholder="Equity — Semiconductors" />
           </Row>
           <Row cols={3}>

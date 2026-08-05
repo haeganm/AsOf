@@ -67,7 +67,7 @@ const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString
  * resolves instantly against the pre-submit page.
  */
 async function submit(page: Page, expect: string) {
-  await page.click('button[type="submit"]');
+  await page.click("[data-primary-submit]");
   await page.waitForFunction(
     (t) => document.body.innerText.toLowerCase().includes(t),
     expect.toLowerCase(),
@@ -129,6 +129,21 @@ async function main() {
 
   console.log("\nwrite paths");
 
+  await step("the ticker picker finds a real security and prefills it", async () => {
+    const found = await visit(page, "/positions/new?q=constellation", "14b-ticker-search");
+    has(found, "CEG", "ticker search results");
+    has(found, "Constellation", "ticker search results");
+    // Choosing a match carries ticker, name and CIK into the form.
+    await page.click('a[href*="ticker=CEG"]');
+    await page.waitForFunction(
+      () => (document.querySelector('[name="ticker"]') as HTMLInputElement)?.value === "CEG"
+    );
+    const cik = await page.inputValue('input[name="cik"]');
+    if (!/^\d{10}$/.test(cik)) throw new Error(`expected a 10-digit CIK, got "${cik}"`);
+    const name = await page.inputValue('[name="name"]');
+    if (!/constellation/i.test(name)) throw new Error(`name not prefilled: "${name}"`);
+  });
+
   let newPositionUrl = "";
   await step("create a position writes thesis v1 and an opening decision", async () => {
     await visit(page, "/positions/new", "14-position-new");
@@ -144,7 +159,7 @@ async function main() {
     await page.fill('[name="falsifiers"]', "Two quarters of margin compression on pricing.");
     await page.fill('[name="exitCondition"]', "A falsifier fires.");
     await page.locator('input[name="confidence"][value="4"]').check({ force: true });
-    await Promise.all([page.waitForURL(/\/positions\/pos_/), page.click('button[type="submit"]')]);
+    await Promise.all([page.waitForURL(/\/positions\/pos_/), page.click("[data-primary-submit]")]);
     newPositionUrl = new URL(page.url()).pathname;
     const b = await page.innerText("body");
     has(b, "SMOKE", "new position");
@@ -191,7 +206,7 @@ async function main() {
     await page.fill('[name="shares"]', "40");
     await page.fill('[name="price"]', "47");
     await page.fill('[name="occurredAt"]', daysAgo(10));
-    await Promise.all([page.waitForURL(/\/decisions\/dec_/), page.click('button[type="submit"]')]);
+    await Promise.all([page.waitForURL(/\/decisions\/dec_/), page.click("[data-primary-submit]")]);
     decisionUrl = new URL(page.url()).pathname;
     const b = await page.innerText("body");
     has(b, "Trim 40 shares", "decision detail");
@@ -221,7 +236,7 @@ async function main() {
       "One quarter is not my falsifier. Holding and waiting for the next print."
     );
     await page.locator('input[name="newConfidence"][value="3"]').check({ force: true });
-    await Promise.all([page.waitForURL(/reveal=/), page.click('button[type="submit"]')]);
+    await Promise.all([page.waitForURL(/reveal=/), page.click("[data-primary-submit]")]);
     const b = await page.innerText("body");
     has(b, "What you decided then", "reveal");
     has(b, "What you decided now", "reveal");
@@ -246,7 +261,7 @@ async function main() {
     await page.fill('[name="iExpect"]', "Margin flat, and the market to ignore the mix commentary.");
     await page.fill('[name="keyVariables"]', "Gross margin\nPricing commentary");
     await page.fill('[name="action_Bear"]', "Cut to a half position on confirmation.");
-    await Promise.all([page.waitForURL(/\/events\/ev_/), page.click('button[type="submit"]')]);
+    await Promise.all([page.waitForURL(/\/events\/ev_/), page.click("[data-primary-submit]")]);
     eventUrl = new URL(page.url()).pathname;
     let b = await page.innerText("body");
     has(b, "Smoke Test Industries Q3", "event detail");
@@ -275,7 +290,7 @@ async function main() {
     await page.fill('[name="thesisNote"]', "The margin claim was simply wrong.");
     await page.fill('[name="lesson"]', "A margin assumption needs a named mechanism, not a trend.");
     await page.fill('[name="processChange"]', "No position sized above 3% on a margin-recovery claim.");
-    await Promise.all([page.waitForURL(/\/postmortems\/pm_/), page.click('button[type="submit"]')]);
+    await Promise.all([page.waitForURL(/\/postmortems\/pm_/), page.click("[data-primary-submit]")]);
     const b = await page.innerText("body");
     has(b, "Right about how to be wrong", "postmortem headline");
     has(b, "A margin assumption needs a named mechanism", "postmortem lesson");
@@ -284,6 +299,19 @@ async function main() {
   await step("patterns page absorbs the new records", async () => {
     const b = await visit(page, "/patterns", "22-patterns-after");
     has(b, "Calibration", "patterns");
+  });
+
+  await step("a real security is created with real price history", async () => {
+    await visit(page, "/positions/new?q=freeport");
+    await page.click('a[href*="ticker=FCX"]');
+    await page.fill('[name="summary"]', "Smoke test: grid copper demand is price-insensitive.");
+    await page.fill('[name="shares"]', "10");
+    await page.fill('[name="price"]', "50");
+    await page.fill('[name="assumptions_new"]', "No new supply reaches market before 2028.");
+    await Promise.all([page.waitForURL(/\/positions\/pos_/), page.click("[data-primary-submit]")]);
+    const b = await page.innerText("body");
+    has(b, "FCX", "real position");
+    has(b, "Price path", "a backfill should give it a price path");
   });
 
   await browser.close();

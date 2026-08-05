@@ -156,7 +156,8 @@ export function seedDatabase(db: DatabaseType.Database) {
     },
   ];
   for (const p of positions) {
-    ins("positions", { ...p, portfolioId: PF, createdAt: p.openedAt ?? d(262) });
+    // demo=1 keeps price ingestion away from the fictional price paths.
+    ins("positions", { ...p, portfolioId: PF, createdAt: p.openedAt ?? d(262), demo: 1 });
   }
 
   // ── Price marks (illustrative, not real quotes) ───────────────────────────

@@ -25,6 +25,10 @@ npm run dev          # http://localhost:3000 — seeds a demo book on first run
 
 **Postmortems refuse to collapse into win or lose.** Six separate verdicts: was the thesis right, the valuation, the sizing, the timing, did you follow your process, and was the result skill, luck or an outside event. A good decision can lose money and a bad one can make it; the useful information is in where the answers disagree.
 
+**Real securities, real prices.** Symbol lookup runs over ~10,400 tickers cached from SEC's published ticker file, so picking a company fills in its name and carries its CIK. Creating that position backfills five years of daily closes from Yahoo, which is what makes returns, weights and the price paths real rather than typed. Free text still works — an unlisted symbol, a private holding, or an offline machine is never a dead end. Both sources are free and need no API key.
+
+The sample book is the exception: its price path is fictional but internally consistent with the fills in its story, so ingestion deliberately skips it. Mixing a real close into it would put a $62 fill next to a real $110 mark on the same day.
+
 **The attention queue surfaces tension without ruling on it.** Evidence standing against an assumption you have not revisited since. Catalysts that passed with no outcome recorded. A thesis whose assumptions are mostly no longer intact. One event that reaches four positions. Every item ends in a question rather than a verdict — AsOf does not know whether your thesis is right, only that something has changed and you have not said either way.
 
 ## How it is built
@@ -49,6 +53,16 @@ npm test                    # as-of correctness: bounds, thesis versioning, the 
 npm run seed -- --force     # rebuild the demo book from scratch
 npm run check:console       # loads all 30 routes, fails on any console error or warning
 npm run check:flow          # drives the whole decision loop in a real browser
+npm run ingest              # refresh the symbol universe, then top up prices
+npm run ingest -- --full    # 5-year price backfill rather than a top-up
+```
+
+Ingestion talks to two free, keyless sources: SEC for the ticker universe and filings, Yahoo for daily closes. Requests are serialised and rate-limited, every attempt is recorded in the `ingest_runs` table, and a network failure can never break a page render — the position simply keeps the price you entered.
+
+SEC asks that automated requests identify themselves with a contact address, and enforces it (a User-Agent carrying a URL is refused with 403). The default is a generic placeholder; if you use this regularly, set your own in `.env.local`:
+
+```
+ASOF_USER_AGENT=AsOf/0.1 (you@example.com)
 ```
 
 `npm test` needs nothing but Node. The two `check:` scripts drive a real browser against a running dev server, so they need `npx playwright install chromium` once. `check:flow` writes to your database — run `npm run seed -- --force` afterwards to restore the demo book.

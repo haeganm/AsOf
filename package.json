@@ -11,7 +11,8 @@
     "seed": "tsx scripts/seed.ts",
     "test": "tsx scripts/test-asof.ts",
     "check:console": "tsx scripts/console-check.ts",
-    "check:flow": "tsx scripts/smoke.ts"
+    "check:flow": "tsx scripts/smoke.ts",
+    "ingest": "tsx scripts/ingest.ts"
   },
   "dependencies": {
     "better-sqlite3": "^11.10.0",

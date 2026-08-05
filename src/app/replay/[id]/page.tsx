@@ -293,7 +293,7 @@ export default async function ReplayRoom({
               hint="Your conviction now, on this information only."
             />
             <div className="flex flex-wrap items-center gap-4 border-t border-rule pt-6">
-              <button type="submit" className="btn btn-solid">
+              <button type="submit" data-primary-submit className="btn btn-solid">
                 Commit and reveal
               </button>
               <Link href="/replay" className="btn btn-quiet">
@@ -499,7 +499,7 @@ export default async function ReplayRoom({
               rows={5}
               hint="The useful version of this answer names the specific thing you knew that you could not have known. “Hard to separate” is a legitimate answer if you say why."
             />
-            <button type="submit" className="btn btn-solid mt-6">
+            <button type="submit" data-primary-submit className="btn btn-solid mt-6">
               Save and close the replay
             </button>
           </form>
