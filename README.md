@@ -21,6 +21,8 @@ npm run dev          # http://localhost:3000 — seeds a demo book on first run
 
 **Beliefs reveal what the book is really betting on.** Positions link to underlying risk drivers, so a chip designer, a nuclear utility, a copper miner and a data-centre REIT show up as what they are — largely one bet expressed four ways. A sector chart cannot show you that.
 
+**And then the tape checks your work.** The belief matrix is your *model* of what connects your positions. Beside it, AsOf computes the realised weekly-return correlation between the same holdings and asks where the two disagree: a belief you declared that the prices never showed, two holdings moving together for a reason you never wrote down, or a stated macro exposure that is not visible at all. On the sample book it confirms the data-centre cluster and refutes one line of a thesis — DLR describes itself as "a levered short on long rates" while correlating about −0.05 with the 10-year yield over two years. Correlation is read from real prices for the symbol rather than from your own fills, because how two securities move together is a property of the market, not of your execution. Findings are withheld below 40 shared weeks rather than hedged.
+
 **Replay is the signature feature.** Pick a past decision. AsOf rebuilds the portfolio as it stood, hides everything that came afterwards — including what you actually chose and how it turned out — and asks you to decide again. Then it shows both answers side by side, what happened next, and a list of everything that arrived after the decision, so you can check whether your new answer quietly used it.
 
 **Postmortems refuse to collapse into win or lose.** Six separate verdicts: was the thesis right, the valuation, the sizing, the timing, did you follow your process, and was the result skill, luck or an outside event. A good decision can lose money and a bad one can make it; the useful information is in where the answers disagree.
@@ -49,8 +51,11 @@ The "intelligence" is deterministic: the attention queue and the pattern cards a
 ```bash
 npm run dev                 # dev server, seeds on first run
 npm run build && npm start  # production
-npm test                    # as-of correctness: bounds, thesis versioning, the Replay seal
+npm test                    # both suites below
+npm run test:asof           # as-of correctness: bounds, thesis versioning, the Replay seal
+npm run test:ingest         # parsers, filing cadence and correlation, against recorded fixtures
 npm run seed -- --force     # rebuild the demo book from scratch
+npm run fixtures            # re-record the fixtures (the only thing needing network)
 npm run check:console       # loads all 30 routes, fails on any console error or warning
 npm run check:flow          # drives the whole decision loop in a real browser
 npm run ingest              # refresh the symbol universe, then top up prices
@@ -68,6 +73,8 @@ ASOF_USER_AGENT=AsOf/0.1 (you@example.com)
 `npm test` needs nothing but Node. The two `check:` scripts drive a real browser against a running dev server, so they need `npx playwright install chromium` once. `check:flow` writes to your database — run `npm run seed -- --force` afterwards to restore the demo book.
 
 `npm test` is the one that matters: if the as-of bound leaks, Replay is a lie. It asserts that nothing dated after a decision reaches its sealed context, that thesis versions resolve to the version in force on a date, and that outcomes stay hidden until they existed.
+
+Neither suite touches the network. `test:ingest` runs against trimmed real responses recorded in `scripts/fixtures/` (~40 KB, public market and filing data), so a provider being slow or down never fails a test for reasons unrelated to the code. Re-record with `npm run fixtures` if a provider changes shape.
 
 ## The demo book
 

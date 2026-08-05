@@ -9,7 +9,10 @@
     "prestart": "tsx scripts/seed.ts",
     "start": "next start",
     "seed": "tsx scripts/seed.ts",
-    "test": "tsx scripts/test-asof.ts",
+    "test": "tsx scripts/test-asof.ts && tsx scripts/test-ingest.ts",
+    "test:asof": "tsx scripts/test-asof.ts",
+    "test:ingest": "tsx scripts/test-ingest.ts",
+    "fixtures": "tsx scripts/record-fixtures.ts",
     "check:console": "tsx scripts/console-check.ts",
     "check:flow": "tsx scripts/smoke.ts",
     "ingest": "tsx scripts/ingest.ts"

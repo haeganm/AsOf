@@ -205,6 +205,16 @@ create unique index if not exists uq_pb on position_beliefs(positionId, beliefId
 create unique index if not exists uq_eb on event_beliefs(eventId, beliefId);
 create unique index if not exists uq_thesis_ver on thesis_versions(positionId, versionNo);
 create unique index if not exists uq_marks on marks(positionId, occurredAt);
+
+-- Ingestion is idempotent: re-reading a filing feed must not duplicate the
+-- record. Not partial, because SQLite will not accept a partial index as an
+-- ON CONFLICT target — and it does not need to be: SQLite treats NULLs as
+-- distinct in a unique index, so any number of hand-written rows without an
+-- external id coexist happily.
+drop index if exists uq_evidence_ext;
+drop index if exists uq_events_ext;
+create unique index if not exists uq_evidence_extid on evidence(externalId);
+create unique index if not exists uq_events_extid on events(externalId);
 `;
 
 /**
@@ -217,6 +227,11 @@ const ADDED_COLUMNS: Array<[string, string, string]> = [
   ["position_beliefs", "createdAt", "text not null default '1970-01-01T00:00:00.000Z'"],
   ["event_beliefs", "occurredAt", "text not null default '1970-01-01T00:00:00.000Z'"],
   ["positions", "cik", "text"],
+  // Distinguishes what you wrote from what the engine found for you.
+  ["evidence", "origin", "text not null default 'user'"],
+  ["evidence", "externalId", "text"],
+  ["events", "estimated", "integer not null default 0"],
+  ["events", "externalId", "text"],
   // Sample positions carry an internally-consistent fictional price path. Mixing
   // real closes into it would put a $62 fill next to a real $110 mark on the same
   // day, so ingestion skips them.
@@ -290,11 +305,14 @@ export function closeDb() {
 }
 
 export function resetDb(db: Database.Database) {
+  // Cached market data is not book data. Reseeding the demo should not throw away
+  // the symbol price series (`sym_*`) or the ticker universe and force a
+  // re-download — those are expensive to fetch and identical for everyone.
+  db.exec("delete from marks where positionId not like 'sym\\_%' escape '\\'");
   const tables = [
     "portfolios",
     "positions",
     "lots",
-    "marks",
     "thesis_versions",
     "decisions",
     "evidence",

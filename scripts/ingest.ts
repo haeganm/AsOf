@@ -11,22 +11,28 @@
  */
 import { getDb } from "../src/lib/db";
 import { refreshUniverse, universeSize, needsRefresh } from "../src/lib/ingest/securities";
-import { syncPrices } from "../src/lib/ingest/prices";
+import { fetchBars, storeBars, syncPrices } from "../src/lib/ingest/prices";
+import { syncFilings } from "../src/lib/ingest/filings";
+import { symbolSeriesId, symbolsToTrack } from "../src/lib/correlation-report";
 
 const argv = process.argv.slice(2);
 const only = (flag: string) => argv.includes(flag);
-const wantUniverse = only("--universe") || (!only("--prices") && true);
-const wantPrices = only("--prices") || !only("--universe");
 const full = only("--full");
+// With no flags, run everything. With any source flag, run only what was asked.
+const picked = ["--universe", "--prices", "--filings"].filter(only);
+const wants = (flag: string) => picked.length === 0 || only(flag);
+const wantUniverse = wants("--universe");
+const wantPrices = wants("--prices");
+const wantFilings = wants("--filings");
 
 async function main() {
   const db = getDb();
 
   if (wantUniverse) {
-    if (needsRefresh() || only("--universe")) {
+    if (needsRefresh() || picked.includes("--universe")) {
       process.stdout.write("universe: fetching SEC ticker file… ");
       try {
-        const { count, skipped } = await refreshUniverse(only("--universe"));
+        const { count, skipped } = await refreshUniverse(picked.includes("--universe"));
         console.log(skipped ? `fresh, ${count} symbols` : `${count} symbols cached`);
       } catch (err) {
         console.log(`failed (${String(err).slice(0, 120)})`);
@@ -59,6 +65,46 @@ async function main() {
         console.log(`${String(stored).padStart(4)} bars (${range})`);
       } catch (err) {
         // A delisted, renamed or fictional symbol is expected in a demo book.
+        console.log(`skipped — ${String(err).slice(0, 90)}`);
+      }
+    }
+  }
+
+  if (wantPrices) {
+    // Real weekly history per *symbol*, kept separate from any position's marks.
+    // This is what the correlation check reads: how two securities move together
+    // is a property of the market, so it applies even to the sample book.
+    const symbols = symbolsToTrack();
+    for (const sym of symbols) {
+      process.stdout.write(`series: ${sym.padEnd(8)} `);
+      try {
+        const bars = await fetchBars(sym, "2y", "1wk");
+        const stored = storeBars(symbolSeriesId(sym), bars);
+        console.log(`${String(stored).padStart(4)} weekly bars`);
+      } catch (err) {
+        console.log(`skipped — ${String(err).slice(0, 80)}`);
+      }
+    }
+  }
+
+  if (wantFilings) {
+    const withCik = db
+      .prepare("select id, ticker, portfolioId, cik from positions where demo=0 and cik is not null")
+      .all() as Array<{ id: string; ticker: string; portfolioId: string; cik: string }>;
+    if (withCik.length === 0) {
+      console.log("filings: no positions carry a CIK yet — pick a security from the search to attach one");
+    }
+    for (const p of withCik) {
+      process.stdout.write(`filings: ${p.ticker.padEnd(6)} `);
+      try {
+        const { evidence, estimated } = await syncFilings(p.id, p.portfolioId, p.ticker, p.cik);
+        console.log(
+          `${String(evidence).padStart(3)} new` +
+            (estimated
+              ? `, next report est. ${estimated.nextAt.slice(0, 10)} (median ${estimated.medianGapDays}d over ${estimated.basedOn})`
+              : ", no cadence yet")
+        );
+      } catch (err) {
         console.log(`skipped — ${String(err).slice(0, 90)}`);
       }
     }

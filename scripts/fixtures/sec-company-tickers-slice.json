@@ -1,0 +1,47 @@
+{
+ "0": {
+  "cik_str": 1045810,
+  "ticker": "NVDA",
+  "title": "NVIDIA CORP"
+ },
+ "1": {
+  "cik_str": 320193,
+  "ticker": "AAPL",
+  "title": "Apple Inc."
+ },
+ "2": {
+  "cik_str": 789019,
+  "ticker": "MSFT",
+  "title": "MICROSOFT CORP"
+ },
+ "3": {
+  "cik_str": 1868275,
+  "ticker": "CEG",
+  "title": "Constellation Energy Corp"
+ },
+ "4": {
+  "cik_str": 1297996,
+  "ticker": "DLR",
+  "title": "DIGITAL REALTY TRUST, INC."
+ },
+ "5": {
+  "cik_str": 320187,
+  "ticker": "NKE",
+  "title": "NIKE, Inc."
+ },
+ "6": {
+  "cik_str": 1633917,
+  "ticker": "PYPL",
+  "title": "PayPal Holdings, Inc."
+ },
+ "7": {
+  "cik_str": 1375365,
+  "ticker": "SMCI",
+  "title": "Super Micro Computer, Inc."
+ },
+ "8": {
+  "cik_str": 831259,
+  "ticker": "FCX",
+  "title": "FREEPORT-MCMORAN INC"
+ }
+}

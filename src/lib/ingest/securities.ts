@@ -11,7 +11,21 @@ import { startRun, finishRun } from "./runs";
 const UNIVERSE_URL = "https://www.sec.gov/files/company_tickers.json";
 const REFRESH_AFTER_DAYS = 7;
 
-type Row = { cik_str: number; ticker: string; title: string };
+export type UniverseResponse = Record<string, { cik_str: number; ticker: string; title: string }>;
+
+/** Pure parse, so the shape can be tested against a recorded response. */
+export function parseUniverse(data: UniverseResponse): Security[] {
+  return Object.values(data)
+    .filter((r) => r?.ticker && r?.title)
+    .map((r) => ({
+      ticker: String(r.ticker).toUpperCase(),
+      // CIKs are zero-padded to ten digits; the JSON carries them as integers.
+      cik: String(r.cik_str).padStart(10, "0"),
+      name: r.title,
+      exchange: null,
+      kind: "equity",
+    }));
+}
 
 export interface Security {
   ticker: string;
@@ -45,8 +59,7 @@ export async function refreshUniverse(force = false): Promise<{ count: number; s
   const db = getDb();
   const run = startRun("sec-universe", null);
   try {
-    const data = await getJson<Record<string, Row>>(UNIVERSE_URL);
-    const rows = Object.values(data).filter((r) => r?.ticker && r?.title);
+    const rows = parseUniverse(await getJson<UniverseResponse>(UNIVERSE_URL));
     const at = nowIso();
 
     const upsert = db.prepare(
@@ -54,9 +67,7 @@ export async function refreshUniverse(force = false): Promise<{ count: number; s
        on conflict(ticker) do update set cik=excluded.cik, name=excluded.name, updatedAt=excluded.updatedAt`
     );
     db.transaction(() => {
-      for (const r of rows) {
-        upsert.run(r.ticker.toUpperCase(), String(r.cik_str).padStart(10, "0"), r.title, null, "equity", at);
-      }
+      for (const r of rows) upsert.run(r.ticker, r.cik, r.name, r.exchange, r.kind, at);
     })();
 
     finishRun(run, true, `${rows.length} symbols`);

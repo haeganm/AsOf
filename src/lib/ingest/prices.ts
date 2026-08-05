@@ -16,7 +16,7 @@ export interface Bar {
   close: number;
 }
 
-type ChartResponse = {
+export type ChartResponse = {
   chart: {
     result?: Array<{
       meta?: { symbol?: string; currency?: string };
@@ -30,11 +30,11 @@ type ChartResponse = {
 /** `range=max` returns a coarse, aggregated series — always ask for a real range. */
 export type Range = "1mo" | "6mo" | "1y" | "2y" | "5y" | "10y";
 
-export async function fetchBars(symbol: string, range: Range = "5y", interval = "1d"): Promise<Bar[]> {
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(
-    symbol
-  )}?range=${range}&interval=${interval}`;
-  const data = await getJson<ChartResponse>(url);
+/**
+ * Pure parse, separate from the fetch so it can be tested against a recorded
+ * response rather than the live endpoint.
+ */
+export function parseChart(data: ChartResponse, symbol = "?"): Bar[] {
   const res = data.chart?.result?.[0];
   if (!res) throw new Error(data.chart?.error?.description ?? `no data for ${symbol}`);
 
@@ -43,11 +43,19 @@ export async function fetchBars(symbol: string, range: Range = "5y", interval = 
   const out: Bar[] = [];
   for (let i = 0; i < ts.length; i++) {
     const close = closes[i];
-    // Yahoo pads holidays and halts with nulls.
+    // Yahoo pads holidays and trading halts with nulls.
     if (close === null || close === undefined || !Number.isFinite(close)) continue;
     out.push({ occurredAt: new Date(ts[i] * 1000).toISOString(), close });
   }
-  return out;
+  // A response can arrive with timestamps out of order after a splice.
+  return out.sort((a, b) => a.occurredAt.localeCompare(b.occurredAt));
+}
+
+export async function fetchBars(symbol: string, range: Range = "5y", interval = "1d"): Promise<Bar[]> {
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(
+    symbol
+  )}?range=${range}&interval=${interval}`;
+  return parseChart(await getJson<ChartResponse>(url), symbol);
 }
 
 /** Writes bars into `marks`, leaving any manually recorded price in place. */

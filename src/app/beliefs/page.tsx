@@ -2,6 +2,8 @@ import Link from "next/link";
 import { eventReach, getBeliefExposure, listEvents, listPositions } from "@/lib/queries";
 import { money, pct, relativeDays } from "@/lib/format";
 import { Badge, Bar, ConfidenceMeter, PageHeader, Section } from "@/components/ui";
+import { CorrelationCheck } from "@/components/correlation";
+import { getCorrelationCheck } from "@/lib/correlation-report";
 
 const FILL: Record<string, string> = { high: "#0f0f0e", medium: "#8a8a85", low: "#cfcfcb" };
 
@@ -146,6 +148,18 @@ export default function BeliefsPage() {
           overlap is the thing worth seeing. Reading down a column tells you what a position depends
           on; reading across a row tells you how much of the book one belief being wrong would touch.
         </p>
+      </Section>
+
+      <Section
+        label="What the tape says"
+        title="The same book, measured instead of declared"
+      >
+        <p className="writing mb-6 text-[14px]">
+          The matrix above is your model of what connects these positions. This one is what actually
+          happened to the prices. Where they agree, the belief is doing real work; where they
+          disagree, either the exposure has not shown up yet or the connection was a story.
+        </p>
+        <CorrelationCheck check={getCorrelationCheck()} />
       </Section>
 
       {crowded.length > 0 && (
