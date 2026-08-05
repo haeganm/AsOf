@@ -1,0 +1,234 @@
+@import "tailwindcss";
+
+/*
+  One monochrome system. No accent colour anywhere — hierarchy comes from
+  weight, rule thickness, and typography. Greys are very slightly warm so the
+  surface reads as paper rather than screen.
+*/
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, sans-serif;
+  --font-serif: ui-serif, Georgia, "Iowan Old Style", "Times New Roman", serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "Cascadia Code", Consolas, monospace;
+
+  --color-paper: #ffffff;
+  --color-wash: #f7f7f6;
+  --color-wash-2: #efefed;
+  --color-rule: #e3e3e0;
+  --color-rule-2: #c9c9c5;
+  --color-ink: #0f0f0e;
+  --color-ink-2: #3c3c39;
+  --color-ink-3: #6d6d68;
+  --color-ink-4: #9b9b95;
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    background: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 14px;
+  }
+
+  ::selection {
+    background: var(--color-ink);
+    color: var(--color-paper);
+  }
+
+  input,
+  textarea,
+  select,
+  button {
+    font: inherit;
+    color: inherit;
+  }
+
+  a {
+    color: inherit;
+  }
+}
+
+/*
+  Everything below sits in the components layer on purpose. Unlayered CSS beats
+  every Tailwind utility regardless of source order, which silently made these
+  classes unoverridable — a `text-paper` on a `.display` heading lost to the
+  class's own colour and rendered black on black.
+*/
+@layer components {
+  /* Numbers must line up in columns everywhere. */
+  .num {
+    font-variant-numeric: tabular-nums;
+    font-family: var(--font-mono);
+    letter-spacing: -0.01em;
+  }
+
+  /* Small uppercase section marker. Used relentlessly — it is most of the rhythm. */
+  .label {
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color-ink-3);
+  }
+
+  .label-ink {
+    color: var(--color-ink);
+  }
+
+  /* The investor's own writing. Serif, generous, never cramped. */
+  .writing {
+    font-family: var(--font-serif);
+    font-size: 15.5px;
+    line-height: 1.72;
+    color: var(--color-ink-2);
+    max-width: 72ch;
+  }
+
+  .writing-lg {
+    font-family: var(--font-serif);
+    font-size: 19px;
+    line-height: 1.6;
+    color: var(--color-ink);
+    max-width: 60ch;
+  }
+
+  /* Colour is deliberately inherited so this works on dark surfaces too. */
+  .display {
+    font-family: var(--font-serif);
+    letter-spacing: -0.015em;
+  }
+
+  /* Underline links on hover only — keeps dense tables quiet. */
+  .link {
+    text-decoration-line: underline;
+    text-decoration-color: var(--color-rule-2);
+    text-underline-offset: 3px;
+    transition: text-decoration-color 120ms;
+  }
+  .link:hover {
+    text-decoration-color: currentColor;
+  }
+
+  /* Inputs are ruled lines, not boxes — a writing surface, not a form. */
+  .field {
+    width: 100%;
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid var(--color-rule-2);
+    padding: 7px 0;
+    outline: none;
+    transition: border-color 120ms;
+  }
+  .field:focus {
+    border-bottom-color: var(--color-ink);
+  }
+  .field::placeholder {
+    color: var(--color-ink-4);
+  }
+
+  .field-box {
+    width: 100%;
+    background: var(--color-paper);
+    border: 1px solid var(--color-rule-2);
+    padding: 10px 12px;
+    outline: none;
+    transition: border-color 120ms;
+  }
+  .field-box:focus {
+    border-color: var(--color-ink);
+  }
+  .field-box::placeholder {
+    color: var(--color-ink-4);
+  }
+
+  textarea.field-box {
+    font-family: var(--font-serif);
+    font-size: 15.5px;
+    line-height: 1.7;
+    resize: vertical;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid var(--color-ink);
+    padding: 8px 16px;
+    font-size: 13px;
+    font-weight: 500;
+    background: var(--color-paper);
+    cursor: pointer;
+    transition: background 120ms, color 120ms;
+  }
+  .btn:hover {
+    background: var(--color-wash-2);
+  }
+
+  .btn-solid {
+    background: var(--color-ink);
+    color: var(--color-paper);
+  }
+  .btn-solid:hover {
+    background: var(--color-ink-2);
+  }
+
+  .btn-quiet {
+    border-color: var(--color-rule-2);
+    color: var(--color-ink-2);
+  }
+  .btn-quiet:hover {
+    border-color: var(--color-ink);
+    background: transparent;
+    color: var(--color-ink);
+  }
+
+  /* Radio/checkbox groups rendered as selectable chips. */
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--color-rule-2);
+    padding: 6px 12px;
+    font-size: 12.5px;
+    cursor: pointer;
+    user-select: none;
+    transition: all 120ms;
+  }
+  .chip:hover {
+    border-color: var(--color-ink);
+  }
+  .chip input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+  }
+  .chip:has(input:checked) {
+    background: var(--color-ink);
+    border-color: var(--color-ink);
+    color: var(--color-paper);
+  }
+
+  /* Sealed = the Replay mode where the future is hidden. Inverted, unmistakable. */
+  .sealed {
+    background: var(--color-ink);
+    color: var(--color-paper);
+  }
+  .sealed .label {
+    color: #a8a8a2;
+  }
+
+  /* Badges carry ink-on-paper colours, which vanish on the inverted surface. */
+  .sealed [data-badge] {
+    background: transparent;
+    border-color: #6d6d68;
+    color: var(--color-paper);
+  }
+  .sealed [data-badge="solid"] {
+    background: var(--color-paper);
+    border-color: var(--color-paper);
+    color: var(--color-ink);
+  }
+}
