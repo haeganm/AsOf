@@ -8,7 +8,7 @@ import {
   listPositions,
   eventReach,
 } from "@/lib/queries";
-import { money, pct, relativeDays, shortDate } from "@/lib/format";
+import { money, pct, relativeDays, shortDate, signedPct } from "@/lib/format";
 import { AttentionQueue } from "@/components/attention";
 import { Bar, ButtonLink, ConfidenceMeter, PageHeader, Section, Stat } from "@/components/ui";
 
@@ -156,13 +156,19 @@ export default function Dashboard() {
                     )}
                   </td>
                   <td className="num py-4 pr-6 text-right text-[12.5px]">
-                    {p.returnPct === null ? (
-                      <span className="text-ink-4">—</span>
-                    ) : (
-                      <span className={p.returnPct < 0 ? "text-ink-3" : "text-ink"}>
-                        {p.returnPct >= 0 ? "+" : "−"}
-                        {Math.abs(p.returnPct).toFixed(1)}%
+                    {isHeld ? (
+                      <span className={(p.returnPct ?? 0) < 0 ? "text-ink-3" : "text-ink"}>
+                        {signedPct(p.returnPct)}
                       </span>
+                    ) : p.realisedPct !== null ? (
+                      <span
+                        className={p.realisedPct < 0 ? "text-ink-3" : "text-ink"}
+                        title={`Realised ${money(p.realisedPnl)}`}
+                      >
+                        {signedPct(p.realisedPct)}
+                      </span>
+                    ) : (
+                      <span className="text-ink-4">—</span>
                     )}
                   </td>
                   <td className="py-4 pr-6 text-right">

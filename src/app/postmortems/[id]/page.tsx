@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getDecision, getPositionSnapshot, getPostmortem, listThesisVersions } from "@/lib/queries";
-import { VERDICT_LABEL, relativeDays, shortDate, signedPct } from "@/lib/format";
+import { VERDICT_LABEL, money, relativeDays, shortDate, signedPct } from "@/lib/format";
 import { DecisionBlock } from "@/components/timeline";
 import { Badge, PageHeader, Section, VerdictMark } from "@/components/ui";
 
@@ -78,7 +78,13 @@ export default async function PostmortemPage({ params }: { params: Promise<{ id:
         }
         lede={
           p
-            ? `${p.name}. ${p.status === "closed" ? "Closed" : "Held"}${p.closedAt ? ` ${shortDate(p.closedAt)}` : ""}${p.returnPct !== null ? `, ${signedPct(p.returnPct)} on average cost` : ""}. The verdict grid below is the point of this page — a single win-or-lose label would throw away everything useful.`
+            ? `${p.name}. ${p.status === "closed" ? "Closed" : "Held"}${p.exitAt ? ` ${shortDate(p.exitAt)}` : ""}${
+                p.realisedPct !== null
+                  ? `, realising ${money(p.realisedPnl)} — ${signedPct(p.realisedPct)} on the cost of the shares sold`
+                  : p.returnPct !== null
+                    ? `, ${signedPct(p.returnPct)} on average cost`
+                    : ""
+              }. The verdict grid below is the point of this page — a single win-or-lose label would throw away everything useful.`
             : undefined
         }
       />

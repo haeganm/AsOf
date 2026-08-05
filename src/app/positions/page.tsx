@@ -64,14 +64,14 @@ export default function PositionsPage() {
                       </div>
                       <div>
                         <div className="label mb-1">
-                          {p.shares > 0.0001 ? "Value" : "Result"}
+                          {p.shares > 0.0001 ? "Value" : p.status === "passed" ? "Never held" : "Result"}
                         </div>
                         <div className="num text-[13px]">
                           {p.shares > 0.0001
                             ? money(p.value)
-                            : p.returnPct !== null
-                              ? pct(p.returnPct)
-                              : "—"}
+                            : p.status === "passed"
+                              ? "—"
+                              : `${money(p.realisedPnl)}${p.realisedPct !== null ? ` · ${pct(p.realisedPct)}` : ""}`}
                         </div>
                       </div>
                       <div>

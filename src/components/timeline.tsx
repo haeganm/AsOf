@@ -307,36 +307,47 @@ function TimelineBody({
 /** Sparkline for a price path. Inline SVG — no chart library. */
 export function Spark({
   points,
+  at,
   width = 220,
   height = 44,
   markLast = true,
 }: {
   points: number[];
+  /** Optional timestamps, one per point. Given these, x is time — not index. */
+  at?: string[];
   width?: number;
   height?: number;
   markLast?: boolean;
 }) {
-  if (points.length < 2) return null;
+  const clean = points.filter((p) => Number.isFinite(p));
+  if (clean.length < 2 || clean.length !== points.length) return null;
   const min = Math.min(...points);
   const max = Math.max(...points);
-  const span = max - min || 1;
-  const x = (i: number) => (i / (points.length - 1)) * (width - 2) + 1;
-  const y = (v: number) => height - 3 - ((v - min) / span) * (height - 6);
-  const path = points.map((p, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)} ${y(p).toFixed(1)}`).join(" ");
+  const span = max - min;
+
+  // Marks are not evenly spaced in time — the demo book has 50-day early gaps and
+  // 26-day recent ones — so an index axis distorts the shape.
+  const ts = at?.length === points.length ? at.map((s) => new Date(s).getTime()) : null;
+  const t0 = ts ? ts[0] : 0;
+  const tSpan = ts ? ts[ts.length - 1] - t0 : 0;
+  const x = (i: number) =>
+    (ts && tSpan > 0 ? (ts[i] - t0) / tSpan : i / (points.length - 1)) * (width - 2) + 1;
+  // A flat series sits on the centre line; pinning it to the floor read as a collapse.
+  const y = (v: number) =>
+    span === 0 ? height / 2 : height - 3 - ((v - min) / span) * (height - 6);
+
+  const path = points
+    .map((p, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)} ${y(p).toFixed(1)}`)
+    .join(" ");
   return (
     <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} aria-hidden>
       <path d={path} fill="none" stroke="#0f0f0e" strokeWidth="1.25" />
-      {markLast && <circle cx={x(points.length - 1)} cy={y(points[points.length - 1])} r="2.5" fill="#0f0f0e" />}
+      {markLast && (
+        <circle cx={x(points.length - 1)} cy={y(points[points.length - 1])} r="2.5" fill="#0f0f0e" />
+      )}
     </svg>
   );
 }
 
-export function ChangeNote({ from, to }: { from: number; to: number }) {
-  const pctChange = (to / from - 1) * 100;
-  return (
-    <span className="num text-[13px]">
-      {money(from, { cents: true })} → {money(to, { cents: true })}
-      <span className="ml-2 text-ink-3">{signedPct(pctChange)}</span>
-    </span>
-  );
-}
+// ponytail: ChangeNote removed — it was exported, never rendered, and divided by
+// `from` with no zero guard. Re-add it the day something actually needs it.

@@ -4,12 +4,13 @@ import { resetDb } from "./db";
 /**
  * The demo book. Dates are relative to seed time so the story never goes stale.
  *
- * The narrative spine: five superficially unrelated holdings (a chip designer, a
+ * The narrative spine: four superficially unrelated holdings (a chip designer, a
  * nuclear utility, a copper miner, a data-center REIT) turn out to be one bet on
- * data-center capex. One position (NKE) has evidence sitting against an
- * unreviewed assumption. One (PYPL) is closed with an honest postmortem: the
- * process held, the outcome did not. One (SMCI) was passed on — a decision that
- * looked wrong for four months and then looked right.
+ * data-center capex. A fifth (NKE) has evidence sitting against an unreviewed
+ * assumption, and was cut to half weight two quarters after its own falsifier
+ * fired. One position (PYPL) is closed with an honest postmortem: the process
+ * held, the outcome did not. One idea (SMCI) was passed on — a decision that
+ * looked wrong for eleven weeks and then looked right.
  */
 
 const DAY = 86_400_000;
@@ -35,7 +36,7 @@ export function seedDatabase(db: DatabaseType.Database) {
     id: PF,
     name: "Meridian — Personal Book",
     description:
-      "Concentrated long-only equity book, 6–10 names, 12–36 month holding intent. Sample data.",
+      "Concentrated long-only equity book, 5–8 names, 12–36 month holding intent. Sample data.",
     createdAt: d(540),
   });
 
@@ -198,20 +199,32 @@ export function seedDatabase(db: DatabaseType.Database) {
 
   // ── Lots (position size over time) ───────────────────────────────────────
   const lots: Array<[string, number, number, number, string]> = [
-    ["pos_nvda", 520, 400, 62.0, "Initial 3.5% weight."],
+    ["pos_nvda", 520, 400, 62.0, "First position in the book."],
     ["pos_nvda", 300, 180, 91.5, "Added into the packaging-constraint thesis ahead of Q2."],
-    ["pos_nvda", 120, -120, 138.0, "Trimmed on valuation discomfort, not on thesis."],
+    ["pos_nvda", 120, -120, 128.0, "Trimmed once the position passed the 30% ceiling I had written down."],
     ["pos_ceg", 400, 90, 178.0, "Starter position."],
-    ["pos_ceg", 200, 40, 229.0, "Added after the PJM auction confirmed load-growth pass-through."],
+    ["pos_ceg", 145, 40, 258.0, "Added after the PJM auction confirmed load-growth pass-through."],
     ["pos_fcx", 330, 600, 44.2, "Full size at once — grid copper, not China beta."],
     ["pos_dlr", 250, 180, 141.0, "Physical-shell expression of the same capex bet."],
     ["pos_nke", 210, 300, 82.4, "Turnaround starter."],
     ["pos_nke", 120, 120, 71.6, "Averaged down. Flagging this as a decision to examine later."],
+    ["pos_nke", 10, -210, 63.5, "Cut to a half position — the falsifier had fired two quarters earlier."],
     ["pos_pypl", 480, 700, 61.2, "Branded-checkout durability bet."],
     ["pos_pypl", 240, -700, 55.1, "Closed — falsifier hit."],
   ];
   lots.forEach(([positionId, daysAgo, deltaShares, price, note], i) =>
     ins("lots", { id: `lot_${i}`, positionId, occurredAt: d(daysAgo), deltaShares, price, note })
+  );
+
+  // A fill is itself a price observation. `recordDecision` writes one for every
+  // lot, so the seed must too — otherwise Replay's "mark that day" falls back to
+  // an earlier mark and disagrees with the fill quoted in the decision.
+  lots.forEach(([positionId, daysAgo, , price], i) =>
+    db
+      .prepare(
+        "insert into marks (id,positionId,occurredAt,price) values (?,?,?,?) on conflict(positionId,occurredAt) do update set price=excluded.price"
+      )
+      .run(`mk_lot_${i}`, positionId, d(daysAgo), price)
   );
 
   // ── Position ↔ belief links ──────────────────────────────────────────────
@@ -229,8 +242,22 @@ export function seedDatabase(db: DatabaseType.Database) {
     ["pos_pypl", "bl_consumer", "Branded checkout volume tracks discretionary spend.", "medium"],
     ["pos_smci", "bl_aicapex", "Would have been a third expression of the same capex bet — part of why I passed.", "high"],
   ];
+  // Dated to when the position was opened, so a Replay room sealed to an earlier
+  // date does not show a connection the investor had not drawn yet.
+  // Mirrors the createdAt fallback used when the positions were inserted.
+  const openedOn = new Map(
+    positions.map((p) => [p.id as string, (p.openedAt as string | null) ?? d(262)])
+  );
   links.forEach(([positionId, beliefId, relationship, sensitivity], i) =>
-    ins("position_beliefs", { id: `pb_${i}`, positionId, beliefId, relationship, sensitivity })
+    ins("position_beliefs", {
+      id: `pb_${i}`,
+      positionId,
+      beliefId,
+      relationship,
+      sensitivity,
+      occurredAt: openedOn.get(positionId) ?? d(540),
+      createdAt: openedOn.get(positionId) ?? d(540),
+    })
   );
 
   // ── Theses (append-only versions) ────────────────────────────────────────
@@ -1098,8 +1125,14 @@ export function seedDatabase(db: DatabaseType.Database) {
     ["ev_dlr_q3", "bl_aicapex"],
     ["ev_dlr_q3", "bl_rates"],
   ];
+  const knownOn = new Map(events.map((e) => [e.id as string, e.knownAt as string]));
   eventBeliefs.forEach(([eventId, beliefId], i) =>
-    ins("event_beliefs", { id: `eb_${i}`, eventId, beliefId })
+    ins("event_beliefs", {
+      id: `eb_${i}`,
+      eventId,
+      beliefId,
+      occurredAt: knownOn.get(eventId) ?? d(540),
+    })
   );
 
   // ── Decisions ────────────────────────────────────────────────────────────
@@ -1109,7 +1142,7 @@ export function seedDatabase(db: DatabaseType.Database) {
       positionId: "pos_nvda",
       occurredAt: d(520),
       type: "open",
-      what: "Open NVDA at roughly a 3.5% weight, 400 shares at $62.",
+      what: "Open NVDA as the book's first position, 400 shares at $62.",
       why: "The constraint on accelerated computing is packaging capacity, not customer demand. If that is right, this is not a semiconductor cycle and the margin structure holds far longer than the market's model allows.",
       expectation:
         "Gross margin above 70% for at least four more quarters, and management naming supply rather than demand as the limiting factor within two quarters.",
@@ -1127,7 +1160,7 @@ export function seedDatabase(db: DatabaseType.Database) {
       positionId: "pos_nvda",
       occurredAt: d(300),
       type: "add",
-      what: "Add 180 shares at $91.50, taking the position from 3.5% to roughly 6% of the book, deliberately ahead of the Q2 print.",
+      what: "Add 180 shares at $91.50, taking NVDA from a quarter of the book to over a third, deliberately ahead of the Q2 print.",
       why: "The specific thing I want to own into this print is the answer to one question: what limits shipments? I think management says packaging, on the record, and I think that changes how the market frames the whole company — from a cyclical semi to a supply-allocated monopoly. If I wait for the answer I pay up for it. The risk of being early here is one bad quarter; the risk of being late is the entire re-rating.",
       expectation:
         "Management names supply as the constraint. Stock +10% or better on a two-week view. If instead they talk about digestion, I expect to be down 8% and to reverse the add rather than the position.",
@@ -1147,18 +1180,20 @@ export function seedDatabase(db: DatabaseType.Database) {
       positionId: "pos_nvda",
       occurredAt: d(120),
       type: "reduce",
-      what: "Trim 120 shares at $138, taking the position down about a quarter.",
-      why: "The multiple has run ahead of what the supply story alone supports and the position had grown to an uncomfortable share of the book. I want to be honest that discomfort, not analysis, is the driver here.",
+      what: "Trim 120 shares at $128, taking the position down about a fifth.",
+      why: "The position had grown past the 30% ceiling I wrote into the thesis at entry, so this is the written rule executing rather than a change of view. I want to record honestly that I also felt relief selling it — that is a separate thing from the rule, and if the rule had not existed I suspect I would have found a reason to sell anyway.",
       expectation:
-        "I do not have a price expectation. I expect to sleep better and to be roughly indifferent on a two-year view.",
+        "No price expectation. I expect to be roughly indifferent on a two-year view and to have a book I can hold through a drawdown.",
       confidence: 3,
-      mainRisk: "That I am selling a compounder because it got large, which is the classic way to turn a good decision into a mediocre one.",
-      reversalTrigger: "None stated — this was a sizing action, not a view change.",
+      mainRisk:
+        "That a fixed weight ceiling makes me sell my best position for arithmetic reasons. The ceiling protects me from ruin and taxes me on being right.",
+      reversalTrigger:
+        "If the weight falls back below 25% on price alone I would not trim again — the ceiling would no longer be binding.",
       linkedEventId: null,
       outcomeAt: d(30),
       outcomeNote:
-        "The stock went from $138 to $152 after the trim and none of my stated trim conditions had actually been met — the position was at about 22% of the book, not the 30% I had written down as the threshold. I trimmed on feeling and used the written condition as cover after the fact.",
-      outcomeVerdict: "did_not_work",
+        "The stock went from $128 to $152 after the trim, so on price this cost me. On process it was right: the position had reached 38.7% of the book against a ceiling of 30% written at entry, and I sold because the rule said to, at a weight I can verify after the fact. Recording this as mixed rather than a failure — one instance going against a rule is not a reason to delete the rule, and the alternative was carrying a position I had already decided was too large.",
+      outcomeVerdict: "mixed",
     },
     {
       id: "dec_nvda_hold",
@@ -1181,7 +1216,7 @@ export function seedDatabase(db: DatabaseType.Database) {
       positionId: "pos_ceg",
       occurredAt: d(400),
       type: "open",
-      what: "Open CEG at roughly 2% of the book, 90 shares at $178 — deliberately a starter, not a full position.",
+      what: "Open CEG with 90 shares at $178 — deliberately a starter, not a full position.",
       why: "Existing firm baseload is the only supply that can serve a new 24/7 large load on the timeline data centers need. That scarcity should not carry a utility multiple. I am starting small because the mechanism — whether the scarcity value actually reaches the generator rather than being administratively suppressed — is unproven.",
       expectation:
         "A capacity auction or a direct PPA within twelve months that prices scarcity visibly. If that happens I want to be much larger.",
@@ -1189,7 +1224,7 @@ export function seedDatabase(db: DatabaseType.Database) {
       mainRisk: "Regulatory suppression. The scarcity can be real and still never reach the equity holder.",
       reversalTrigger: "An auction clearing flat despite rising load, or a price cap being invoked.",
       linkedEventId: null,
-      outcomeAt: d(200),
+      outcomeAt: d(148),
       outcomeNote:
         "The PJM auction cleared far above range with load growth named as the driver. Mechanism confirmed. Starting small and sizing up on confirmation was the right structure.",
       outcomeVerdict: "worked",
@@ -1197,9 +1232,9 @@ export function seedDatabase(db: DatabaseType.Database) {
     {
       id: "dec_ceg_add",
       positionId: "pos_ceg",
-      occurredAt: d(200),
+      occurredAt: d(145),
       type: "add",
-      what: "Add 40 shares at $229 following the auction result, taking CEG to a full position.",
+      what: "Add 40 shares at $258 following the auction result, taking CEG to a full position.",
       why: "This is the pre-committed bull-case action from the event plan. The auction confirmed assumption a2 — the one I was least sure of and the reason the position was small. With the mechanism proven the uncertainty that justified a starter size is gone.",
       expectation: "Continued re-rating as the market recognises the auction as repeatable rather than one-off.",
       confidence: 4,
@@ -1215,7 +1250,7 @@ export function seedDatabase(db: DatabaseType.Database) {
       positionId: "pos_fcx",
       occurredAt: d(330),
       type: "open",
-      what: "Open FCX at a full 5% weight immediately, 600 shares at $44.20 — no scaling in.",
+      what: "Open FCX at a full weight immediately, 600 shares at $44.20 — no scaling in.",
       why: "Copper is priced off Chinese property and the incremental demand is grid and electrification, which is price-insensitive and policy-driven. Supply cannot respond before 2028. I am going to full size at once because I do not have a catalyst to wait for; the mis-pricing is structural, not event-driven.",
       expectation: "Copper above $5.00/lb within eighteen months as grid demand shows up in inventory data.",
       confidence: 3,
@@ -1232,7 +1267,7 @@ export function seedDatabase(db: DatabaseType.Database) {
       positionId: "pos_dlr",
       occurredAt: d(250),
       type: "open",
-      what: "Open DLR at roughly 3% of the book, 180 shares at $141.",
+      what: "Open DLR with 180 shares at $141, sized below a full weight.",
       why: "Power interconnection has turned data-center shell into a scarce-permit business. Existing capacity with power attached should re-lease at spreads REIT models do not contemplate.",
       expectation: "Double-digit cash releasing spreads for at least four quarters, and multiple expansion as the market re-frames this from rate-sensitive REIT to scarce asset.",
       confidence: 4,
@@ -1266,7 +1301,7 @@ export function seedDatabase(db: DatabaseType.Database) {
       positionId: "pos_nke",
       occurredAt: d(210),
       type: "open",
-      what: "Open NKE at roughly 3% of the book, 300 shares at $82.40.",
+      what: "Open NKE with 300 shares at $82.40, sized below a full weight given the turnaround risk.",
       why: "The damage is self-inflicted — a distribution mistake, not competitive displacement. Self-inflicted damage is repairable and the market is pricing permanent impairment. New management has already begun re-entering wholesale.",
       expectation: "Gross margin inflecting within three quarters as clearance completes, and visible wholesale shelf-space recovery.",
       confidence: 4,
@@ -1283,7 +1318,7 @@ export function seedDatabase(db: DatabaseType.Database) {
       positionId: "pos_nke",
       occurredAt: d(120),
       type: "add",
-      what: "Add 120 shares at $71.60, taking NKE from 3% to roughly 4% of the book.",
+      what: "Add 120 shares at $71.60, taking NKE up to a full weight.",
       why: "Below $70 was my written add condition and this is close enough. Wholesale re-entry is measurably working — shelf space is coming back — and the market is treating a slow fix as no fix.",
       expectation: "Margin inflection at the next print, which should be the clearing event for the whole thesis.",
       confidence: 4,
@@ -1313,11 +1348,29 @@ export function seedDatabase(db: DatabaseType.Database) {
       outcomeVerdict: null,
     },
     {
+      id: "dec_nke_cut",
+      positionId: "pos_nke",
+      occurredAt: d(10),
+      type: "reduce",
+      what: "Cut NKE to a half position, selling 210 shares at $63.50.",
+      why: "My thesis said that if the margin assumption moved to broken I would cut to a half position rather than debate it. Gross margin has now missed for four consecutive quarters and the clearance guidance has been extended again. The assumption is broken. I am doing what I said I would do, two quarters after I should have done it.",
+      expectation:
+        "No price view. This removes an exposure I can no longer defend at full size and leaves enough of a position that I keep paying attention.",
+      confidence: 3,
+      mainRisk:
+        "That I am selling the bottom of a genuine turnaround because I got tired of being wrong, and that the wholesale recovery I correctly identified shows up in the numbers next year.",
+      reversalTrigger: "",
+      linkedEventId: null,
+      outcomeAt: null,
+      outcomeNote: null,
+      outcomeVerdict: null,
+    },
+    {
       id: "dec_pypl_open",
       positionId: "pos_pypl",
       occurredAt: d(480),
       type: "open",
-      what: "Open PYPL at roughly 4% of the book, 700 shares at $61.20.",
+      what: "Open PYPL with 700 shares at $61.20, the second position in the book.",
       why: "Branded checkout is a habit business trading at a melting-ice-cube multiple. The share loss is real but slow, and at 11x I only need the decline to be gradual rather than reversed.",
       expectation: "Low-single-digit branded volume growth sustained, transaction margin dollars growing, 5%+ of shares retired annually.",
       confidence: 4,
@@ -1364,7 +1417,7 @@ export function seedDatabase(db: DatabaseType.Database) {
       linkedEventId: null,
       outcomeAt: d(60),
       outcomeNote:
-        "It ran from $640 to $930 over the four months after I passed — about +45% — and I had to sit with looking wrong. It then fell to $395. The reasoning that felt weakest at the time (concentration of belief, not the accounting) is the one that held up.",
+        "It ran from $640 to $930 over the eleven weeks after I passed — about +45% — and I had to sit with looking wrong. It then fell to $395. The reasoning that felt weakest at the time (concentration of belief, not the accounting) is the one that held up.",
       outcomeVerdict: "worked",
     },
     {
@@ -1660,7 +1713,7 @@ export function seedDatabase(db: DatabaseType.Database) {
       kind: "interpretation",
       source: "My own read",
       title: "Up 45% since I passed and my reasoning has not changed",
-      body: "This is the uncomfortable part of a pass: there is no position to review, only a decision to sit with. Nothing in the last four months has addressed either the margin structure or the filing issue. The price is not evidence.",
+      body: "This is the uncomfortable part of a pass: there is no position to review, only a decision to sit with. Nothing in the weeks since has addressed either the margin structure or the filing issue. The price is not evidence.",
       stance: "neutral",
       contradictsAssumptionId: null,
     },
@@ -1680,9 +1733,9 @@ export function seedDatabase(db: DatabaseType.Database) {
       valuationRight: "partly",
       valuationNote:
         "11x was genuinely cheap on the numbers as they stood. What I got wrong is that cheapness was doing the work of a margin of safety on a deteriorating asset, where it functions as a discount rate on a shrinking stream instead.",
-      sizingRight: "yes",
+      sizingRight: "partly",
       sizingNote:
-        "4% on a thesis rated 4/10 confidence with a clearly specified falsifier. The loss was 10% of a 4% position. Sizing is the reason this was survivable and unremarkable rather than damaging.",
+        "Confidence 4 out of 5 with a clearly specified falsifier, and the loss was under 10% of the position — survivable, and the falsifier is why. But this was a large share of a five-name book at the time, and I should not pretend a concentrated position was prudently sized just because the outcome was mild.",
       timingRight: "partly",
       timingNote:
         "Entry was reasonable. Exit was on the day the falsifier printed, which is the right rule — but the deceleration was visible three quarters earlier and I chose to wait for the binary trigger rather than reduce along the way. Correct by my rule; the rule may be too coarse.",

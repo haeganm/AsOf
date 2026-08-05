@@ -10,6 +10,7 @@ import {
   priceAt,
   sharesAt,
 } from "@/lib/queries";
+// `pct` is used for the as-of weight; `money` for the mark on that day.
 import { money, pct, relativeDays, shortDate } from "@/lib/format";
 import { Badge, ConfidenceMeter, PageHeader, Section } from "@/components/ui";
 
@@ -23,15 +24,24 @@ export default function ReplayIndex() {
 
   const setups = listDecisions()
     .filter((d) => d.occurredAt < now && d.positionId)
+    // A position can be missing if a decision references an id that no longer
+    // exists; dropping the row beats crashing the whole index.
+    .filter((d) => positions.has(d.positionId!))
     .map((d) => {
       const asOf = justBefore(d.occurredAt);
       const p = positions.get(d.positionId!)!;
-      const thesis = getThesisAt(d.positionId!, asOf);
+      const thesis = getThesisAt(d.positionId!, d.occurredAt);
       const shares = sharesAt(d.positionId!, asOf);
-      const price = priceAt(d.positionId!, asOf);
-      const evidenceCount = listEvidence(d.positionId!, { asOf }).length;
-      const pending = listEvents({ asOf, positionId: d.positionId! }).filter(
-        (e) => e.occurredAt > asOf
+      const price = priceAt(d.positionId!, d.occurredAt);
+      // Weight as it was on the day, not today's — the card is a description of
+      // that moment and mixing the two produced "700 shares held, 0.0% of book".
+      const bookThen = listPositions(asOf);
+      const totalThen = bookThen.reduce((s, x) => s + x.value, 0);
+      const weightThen =
+        price !== null && totalThen > 0 ? ((shares * price) / totalThen) * 100 : 0;
+      const evidenceCount = listEvidence(d.positionId!, { asOf: d.occurredAt }).length;
+      const pending = listEvents({ asOf: d.occurredAt, positionId: d.positionId! }).filter(
+        (e) => e.occurredAt > d.occurredAt
       );
       const attempts = listReplayAttempts(d.id);
       // Richer context makes for a better simulation, so rank on it.
@@ -41,7 +51,7 @@ export default function ReplayIndex() {
         (pending.length > 0 ? 3 : 0) +
         (d.outcomeVerdict ? 2 : 0) +
         (shares > 0 ? 1 : 0);
-      return { d, p, thesis, shares, price, evidenceCount, pending, attempts, score };
+      return { d, p, thesis, shares, price, weightThen, evidenceCount, pending, attempts, score };
     })
     .sort((a, b) => b.score - a.score || b.d.occurredAt.localeCompare(a.d.occurredAt));
 
@@ -162,7 +172,7 @@ export default function ReplayIndex() {
                   <span className="num w-[52px] shrink-0 text-[13px] font-medium">{s.p.ticker}</span>
                   <span className="min-w-0 flex-1 text-[12.5px] text-ink-2">
                     {s.shares > 0
-                      ? `${s.shares.toLocaleString()} shares held, ${pct(s.p.weightPct)} of the book`
+                      ? `${s.shares.toLocaleString()} shares held, ${pct(s.weightThen)} of the book`
                       : "No position held at the time"}
                     {s.thesis && ` · thesis v${s.thesis.versionNo}`}
                     {s.pending.length > 0 && ` · ${s.pending.length} catalyst ahead`}

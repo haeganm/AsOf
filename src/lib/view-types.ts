@@ -16,12 +16,29 @@ import type {
 } from "./types";
 
 export interface PositionSnapshot extends Position {
+  /**
+   * Status *as of the bound*, not the stored value — rewinding un-closes a
+   * position that had not been sold yet, and a watched idea is not "closed".
+   */
+  status: Position["status"];
+  /** The raw stored status, for the rare case a page needs it. */
+  declaredStatus: Position["status"];
   shares: number;
   /** Latest mark at or before the as-of bound. Null if the position had no mark yet. */
   price: number | null;
   value: number;
+  /** Average cost of the *current* holding; 0 once flat. */
   costBasis: number;
+  /** Unrealised return on the current holding. Null when flat. */
   returnPct: number | null;
+  realisedPnl: number;
+  /** Realised return on the cost of the shares sold. Null if nothing has been sold. */
+  realisedPct: number | null;
+  unrealisedPnl: number;
+  totalPnl: number;
+  /** Price and date of the sale that closed the position. Null while still held. */
+  exitPrice: number | null;
+  exitAt: string | null;
   weightPct: number;
   thesis: Thesis | null;
   lastActivityAt: string | null;
@@ -79,8 +96,10 @@ export interface Pattern {
 
 export interface ReplayContext {
   decision: Decision;
-  /** Everything at or before this instant is fair game; everything after is sealed. */
+  /** The user's own act is sealed from here (1 ms before the decision). */
   asOf: string;
+  /** Market facts were knowable up to and including the decision instant. */
+  marketAsOf: string;
   position: PositionSnapshot | null;
   positionsThen: PositionSnapshot[];
   thesisThen: Thesis | null;

@@ -11,6 +11,8 @@ import {
   listEvidence,
   listThesisVersions,
   marksFor,
+  priceAt,
+  priceMoveSince,
 } from "@/lib/queries";
 import { money, pct, relativeDays, shortDate, signedPct } from "@/lib/format";
 import { AttentionQueue } from "@/components/attention";
@@ -44,6 +46,10 @@ export default async function PositionPage({ params }: { params: Promise<{ id: s
   const marks = marksFor(id);
   const attention = getAttentionItems().filter((a) => a.positionId === id);
   const isHeld = p.shares > 0.0001;
+  // For a pass there is no exit, so the reference point is when the idea was recorded.
+  const referenceAt = p.status === "passed" ? p.createdAt : p.exitAt;
+  const priceAtPass = p.status === "passed" ? priceAt(id, p.createdAt) : null;
+  const sincePct = priceMoveSince(id, referenceAt);
 
   // Assumption ids appear on evidence; resolve them to text across every version
   // so a contradiction reads in English even if the assumption was later reworded.
@@ -90,27 +96,63 @@ export default async function PositionPage({ params }: { params: Promise<{ id: s
       />
 
       <div className="mb-10 grid grid-cols-2 items-start gap-x-8 gap-y-7 border-b border-rule pb-8 sm:grid-cols-4 lg:grid-cols-5">
-        <Stat
-          label="Position"
-          value={isHeld ? money(p.value) : "—"}
-          sub={
-            isHeld
-              ? `${p.shares.toLocaleString()} sh · ${pct(p.weightPct)} of book`
-              : p.status === "passed"
-                ? "No shares ever held"
-                : `Fully sold ${p.closedAt ? shortDate(p.closedAt) : ""}`
-          }
-        />
-        <Stat
-          label="Mark"
-          value={p.price !== null ? money(p.price, { cents: true }) : "—"}
-          sub={p.costBasis > 0 ? `Avg cost ${money(p.costBasis, { cents: true })}` : "No cost basis"}
-        />
-        <Stat
-          label={p.status === "passed" ? "Since you passed" : "Return"}
-          value={signedPct(p.returnPct)}
-          sub={p.status === "passed" ? "Price move since the pass" : "On average cost"}
-        />
+        {isHeld ? (
+          <>
+            <Stat
+              label="Position"
+              value={money(p.value)}
+              sub={`${p.shares.toLocaleString()} sh · ${pct(p.weightPct)} of book`}
+            />
+            <Stat
+              label="Mark"
+              value={p.price !== null ? money(p.price, { cents: true }) : "—"}
+              sub={
+                p.costBasis > 0 ? `Avg cost ${money(p.costBasis, { cents: true })}` : "No cost basis"
+              }
+            />
+            <Stat
+              label="Return"
+              value={signedPct(p.returnPct)}
+              sub={
+                p.realisedPnl !== 0
+                  ? `Unrealised. Realised so far ${money(p.realisedPnl)}`
+                  : "On average cost"
+              }
+            />
+          </>
+        ) : p.status === "passed" ? (
+          <>
+            <Stat label="Position" value="—" sub="Never owned — recorded as a pass" />
+            <Stat
+              label="Price when you passed"
+              value={priceAtPass !== null ? money(priceAtPass, { cents: true }) : "—"}
+              sub={`Now ${p.price !== null ? money(p.price, { cents: true }) : "—"}`}
+            />
+            <Stat
+              label="Since you passed"
+              value={signedPct(sincePct)}
+              sub="What declining it has cost or saved"
+            />
+          </>
+        ) : (
+          <>
+            <Stat
+              label="Result"
+              value={money(p.realisedPnl)}
+              sub={`Realised ${signedPct(p.realisedPct)} on cost`}
+            />
+            <Stat
+              label="Exit"
+              value={p.exitPrice !== null ? money(p.exitPrice, { cents: true }) : "—"}
+              sub={p.exitAt ? `Sold ${shortDate(p.exitAt)}` : "Fully sold"}
+            />
+            <Stat
+              label="Since you exited"
+              value={signedPct(sincePct)}
+              sub={`Now ${p.price !== null ? money(p.price, { cents: true }) : "—"}`}
+            />
+          </>
+        )}
         <Stat
           label="Conviction"
           value={thesis ? `${thesis.confidence}/5` : "—"}
@@ -119,7 +161,12 @@ export default async function PositionPage({ params }: { params: Promise<{ id: s
         {marks.length > 1 && (
           <div className="col-span-2 sm:col-span-4 lg:col-span-1">
             <div className="label mb-2">Price path</div>
-            <Spark points={marks.map((m) => m.price)} width={200} height={40} />
+            <Spark
+              points={marks.map((m) => m.price)}
+              at={marks.map((m) => m.occurredAt)}
+              width={200}
+              height={40}
+            />
             <div className="num mt-1 flex justify-between text-[10px] text-ink-4">
               <span>{shortDate(marks[0].occurredAt)}</span>
               <span>now</span>

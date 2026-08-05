@@ -203,6 +203,8 @@ export interface PositionBelief {
   beliefId: string;
   relationship: string | null;
   sensitivity: Sensitivity;
+  /** When you connected this position to this belief. Bounds as-of views. */
+  occurredAt: string;
 }
 
 export interface Postmortem {

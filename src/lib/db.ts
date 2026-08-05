@@ -122,18 +122,24 @@ create table if not exists beliefs (
   createdAt text not null
 );
 
+-- occurredAt is load-bearing: without it a belief link created today renders
+-- inside a Replay room sealed to a past date, which is the one thing the
+-- product must never do.
 create table if not exists position_beliefs (
   id text primary key,
   positionId text not null,
   beliefId text not null,
   relationship text,
-  sensitivity text not null
+  sensitivity text not null,
+  occurredAt text not null default '1970-01-01T00:00:00.000Z',
+  createdAt text not null default '1970-01-01T00:00:00.000Z'
 );
 
 create table if not exists event_beliefs (
   id text primary key,
   eventId text not null,
-  beliefId text not null
+  beliefId text not null,
+  occurredAt text not null default '1970-01-01T00:00:00.000Z'
 );
 
 create table if not exists postmortems (
@@ -157,12 +163,46 @@ create table if not exists replay_attempts (
   hindsightNote text
 );
 
+`;
+
+/** Applied after `migrate`, because some of these index the added columns. */
+const INDEXES = `
 create index if not exists idx_lots_pos on lots(positionId, occurredAt);
 create index if not exists idx_marks_pos on marks(positionId, occurredAt);
 create index if not exists idx_thesis_pos on thesis_versions(positionId, occurredAt);
 create index if not exists idx_evidence_pos on evidence(positionId, occurredAt);
 create index if not exists idx_decisions_pos on decisions(positionId, occurredAt);
+create index if not exists idx_pb_pos on position_beliefs(positionId, occurredAt);
+create index if not exists idx_eb_ev on event_beliefs(eventId, occurredAt);
+
+-- A duplicate link would double-count a position's value in belief exposure and
+-- push a belief's share of the book above 100%.
+create unique index if not exists uq_pb on position_beliefs(positionId, beliefId);
+create unique index if not exists uq_eb on event_beliefs(eventId, beliefId);
+create unique index if not exists uq_thesis_ver on thesis_versions(positionId, versionNo);
+create unique index if not exists uq_marks on marks(positionId, occurredAt);
 `;
+
+/**
+ * Columns added after the first release. SQLite has no "add column if not
+ * exists", so each is attempted and its duplicate-column error swallowed —
+ * cheaper and safer than a migration framework for a local single-user file.
+ */
+const ADDED_COLUMNS: Array<[string, string, string]> = [
+  ["position_beliefs", "occurredAt", "text not null default '1970-01-01T00:00:00.000Z'"],
+  ["position_beliefs", "createdAt", "text not null default '1970-01-01T00:00:00.000Z'"],
+  ["event_beliefs", "occurredAt", "text not null default '1970-01-01T00:00:00.000Z'"],
+];
+
+function migrate(db: Database.Database) {
+  for (const [table, column, decl] of ADDED_COLUMNS) {
+    try {
+      db.exec(`alter table ${table} add column ${column} ${decl}`);
+    } catch (err) {
+      if (!/duplicate column/i.test(String(err))) throw err;
+    }
+  }
+}
 
 let cached: Database.Database | null = null;
 
@@ -172,23 +212,44 @@ export function getDb(): Database.Database {
   // ASOF_DB_FILE lets the test suite point the query layer at a throwaway db.
   const file = process.env.ASOF_DB_FILE ?? path.join(process.cwd(), "data", "asof.db");
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const db = new Database(file);
-  db.pragma("journal_mode = WAL");
-  db.pragma("foreign_keys = ON");
-  db.exec(DDL);
-  cached = db;
-  // Seeding happens in `npm run seed`, wired to predev/prestart — so the app is
-  // never empty on a fresh clone without dragging the seed into the bundle.
-  return db;
+  cached = configure(new Database(file));
+  // An empty book must render, not 500. Seeding the demo is separate and lives
+  // in `npm run seed` (wired to predev/prestart).
+  ensurePortfolio(cached);
+  return cached;
 }
 
 /** Open a DB at an explicit path with the schema applied but no auto-seed. Used by scripts/tests. */
 export function openDb(file: string): Database.Database {
   if (file !== ":memory:") fs.mkdirSync(path.dirname(file), { recursive: true });
-  const db = new Database(file);
+  return configure(new Database(file));
+}
+
+/** Single place where connection settings live, so tests match production. */
+function configure(db: Database.Database): Database.Database {
   db.pragma("journal_mode = WAL");
+  db.pragma("foreign_keys = ON");
+  // Two writers (a dev server and `npm run seed`) otherwise throw SQLITE_BUSY
+  // straight out of a server action.
+  db.pragma("busy_timeout = 5000");
   db.exec(DDL);
+  migrate(db);
+  db.exec(INDEXES);
   return db;
+}
+
+/** The app is single-portfolio; guarantee the row exists so reads cannot be undefined. */
+export function ensurePortfolio(db: Database.Database): string {
+  const row = db.prepare("select id from portfolios limit 1").get() as { id: string } | undefined;
+  if (row) return row.id;
+  const id = newId("pf");
+  db.prepare("insert into portfolios (id,name,description,createdAt) values (?,?,?,?)").run(
+    id,
+    "My Book",
+    null,
+    nowIso()
+  );
+  return id;
 }
 
 /** Releases the cached connection. Windows will not unlink an open db file. */

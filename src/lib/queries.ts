@@ -1,4 +1,5 @@
 import { getDb } from "./db";
+import { describeSpan } from "./format";
 import type {
   AttentionItem,
   Belief,
@@ -63,20 +64,29 @@ function toEvent(r: Record<string, unknown>, asOf?: string): CatalystEvent {
     outcome: parse(r.outcome, null),
   };
   // The outcome did not exist yet at `asOf`, so it must not be visible.
-  if (asOf && ev.resolvedAt && ev.resolvedAt > asOf) {
-    ev.outcome = null;
-    ev.resolvedAt = null;
-    ev.status = "upcoming";
+  // Keyed on "is there an outcome" rather than on resolvedAt alone: a resolved
+  // row with a null resolvedAt would otherwise leak at every bound.
+  if (asOf && (ev.outcome || ev.status === "resolved")) {
+    const knownResolved = ev.resolvedAt !== null && ev.resolvedAt <= asOf;
+    if (!knownResolved) {
+      ev.outcome = null;
+      ev.resolvedAt = null;
+      ev.status = "upcoming";
+    }
   }
   return ev;
 }
 
 function toDecision(r: Record<string, unknown>, asOf?: string): Decision {
   const dec = { ...(r as unknown as Decision) };
-  if (asOf && dec.outcomeAt && dec.outcomeAt > asOf) {
-    dec.outcomeAt = null;
-    dec.outcomeNote = null;
-    dec.outcomeVerdict = null;
+  // Same reasoning as toEvent: a verdict with no outcomeAt must still be hidden.
+  if (asOf && (dec.outcomeVerdict || dec.outcomeNote)) {
+    const knownJudged = dec.outcomeAt !== null && dec.outcomeAt <= asOf;
+    if (!knownJudged) {
+      dec.outcomeAt = null;
+      dec.outcomeNote = null;
+      dec.outcomeVerdict = null;
+    }
   }
   return dec;
 }
@@ -98,24 +108,70 @@ export function sharesAt(positionId: string, asOf?: string): number {
   return r.s;
 }
 
-export function costBasisAt(positionId: string, asOf?: string): number {
+/** Anything smaller than this is float residue from fractional lots, not a holding. */
+const EPS = 0.0001;
+
+export interface Ledger {
+  shares: number;
+  /** Average cost of the *current* holding. 0 when flat. */
+  avgCost: number;
+  /** Cost basis of the shares that have been sold. */
+  soldCost: number;
+  realisedPnl: number;
+  exitPrice: number | null;
+  exitAt: string | null;
+}
+
+/**
+ * One walk over the lots produces every derived number, so nothing is computed
+ * twice and realised P&L is not lost the moment a position goes flat.
+ */
+export function positionLedger(positionId: string, asOf?: string): Ledger {
   const rows = getDb()
-    .prepare("select deltaShares, price from lots where positionId=? and occurredAt<=? order by occurredAt")
-    .all(positionId, bound(asOf)) as Array<{ deltaShares: number; price: number }>;
-  // Average cost, reduced proportionally on sells.
+    .prepare(
+      // rowid breaks ties so same-instant lots replay in insertion order — a sell
+      // must never be processed before the buy it reduces.
+      "select deltaShares, price, occurredAt from lots where positionId=? and occurredAt<=? order by occurredAt, rowid"
+    )
+    .all(positionId, bound(asOf)) as Array<{ deltaShares: number; price: number; occurredAt: string }>;
+
   let shares = 0;
   let cost = 0;
+  let soldCost = 0;
+  let realisedPnl = 0;
+  let exitPrice: number | null = null;
+  let exitAt: string | null = null;
+
   for (const l of rows) {
     if (l.deltaShares > 0) {
       cost += l.deltaShares * l.price;
       shares += l.deltaShares;
     } else {
-      const avg = shares > 0 ? cost / shares : 0;
-      cost += l.deltaShares * avg;
+      const qty = Math.min(-l.deltaShares, shares);
+      const avg = shares > EPS ? cost / shares : 0;
+      realisedPnl += qty * (l.price - avg);
+      soldCost += qty * avg;
+      cost -= qty * avg;
       shares += l.deltaShares;
+      exitPrice = l.price;
+      exitAt = l.occurredAt;
     }
   }
-  return shares > 0 ? cost / shares : 0;
+
+  const flat = shares <= EPS;
+  return {
+    shares,
+    avgCost: flat ? 0 : cost / shares,
+    soldCost,
+    realisedPnl,
+    exitPrice: flat ? exitPrice : null,
+    exitAt: flat ? exitAt : null,
+  };
+}
+
+/** Average cost of the current holding. 0 when flat — use `positionLedger` for a closed position. */
+export function costBasisAt(positionId: string, asOf?: string): number {
+  return positionLedger(positionId, asOf).avgCost;
 }
 
 export function priceAt(positionId: string, asOf?: string): number | null {
@@ -125,6 +181,14 @@ export function priceAt(positionId: string, asOf?: string): number | null {
     )
     .get(positionId, bound(asOf)) as { price: number } | undefined;
   return r?.price ?? null;
+}
+
+/** Percentage price move between a past date and now. Used for exits and passes. */
+export function priceMoveSince(positionId: string, fromIso: string | null): number | null {
+  if (!fromIso) return null;
+  const then = priceAt(positionId, fromIso);
+  const now = priceAt(positionId);
+  return then && now ? (now / then - 1) * 100 : null;
 }
 
 export function marksFor(positionId: string, opts: { asOf?: string; after?: string } = {}): Mark[] {
@@ -153,6 +217,7 @@ export function listThesisVersions(positionId: string, asOf?: string): Thesis[] 
   return rows.map(toThesis);
 }
 
+/** Last time the investor did anything with this position — trades and events included. */
 export function lastActivityAt(positionId: string, asOf?: string): string | null {
   const b = bound(asOf);
   const r = getDb()
@@ -161,24 +226,55 @@ export function lastActivityAt(positionId: string, asOf?: string): string | null
          select max(occurredAt) as at from thesis_versions where positionId=? and occurredAt<=?
          union all select max(occurredAt) from decisions where positionId=? and occurredAt<=?
          union all select max(occurredAt) from evidence where positionId=? and occurredAt<=?
+         union all select max(occurredAt) from lots where positionId=? and occurredAt<=?
+         union all select max(occurredAt) from postmortems where positionId=? and occurredAt<=?
+         union all select max(knownAt) from events where positionId=? and knownAt<=?
        )`
     )
-    .get(positionId, b, positionId, b, positionId, b) as { at: string | null };
+    .get(positionId, b, positionId, b, positionId, b, positionId, b, positionId, b, positionId, b) as {
+    at: string | null;
+  };
   return r.at;
 }
 
+/**
+ * `status` is deliberately overwritten with the status *as of the bound* rather
+ * than the stored one, so rewinding un-closes a position everywhere at once and
+ * a "watching" idea stops reporting itself as closed.
+ */
 function snapshot(p: Position, asOf: string | undefined, totalValue: number): PositionSnapshot {
-  const shares = sharesAt(p.id, asOf);
+  const led = positionLedger(p.id, asOf);
   const price = priceAt(p.id, asOf);
-  const value = price !== null ? shares * price : 0;
-  const basis = costBasisAt(p.id, asOf);
+  const value = price !== null ? led.shares * price : 0;
+  const held = led.shares > EPS;
+  const b = bound(asOf);
+
+  const status: Position["status"] =
+    p.status === "passed"
+      ? "passed"
+      : held
+        ? "open"
+        : p.closedAt && p.closedAt <= b
+          ? "closed"
+          : "watching";
+
+  const unrealisedPnl = held && price !== null ? led.shares * (price - led.avgCost) : 0;
+
   return {
     ...p,
-    shares,
+    status,
+    declaredStatus: p.status,
+    shares: led.shares,
     price,
     value,
-    costBasis: basis,
-    returnPct: basis > 0 && price !== null ? (price / basis - 1) * 100 : null,
+    costBasis: led.avgCost,
+    returnPct: led.avgCost > 0 && price !== null ? (price / led.avgCost - 1) * 100 : null,
+    realisedPnl: led.realisedPnl,
+    realisedPct: led.soldCost > 0 ? (led.realisedPnl / led.soldCost) * 100 : null,
+    unrealisedPnl,
+    totalPnl: led.realisedPnl + unrealisedPnl,
+    exitPrice: led.exitPrice,
+    exitAt: led.exitAt,
     weightPct: totalValue > 0 ? (value / totalValue) * 100 : 0,
     thesis: getThesisAt(p.id, asOf),
     lastActivityAt: lastActivityAt(p.id, asOf),
@@ -190,34 +286,23 @@ export function listPositions(asOf?: string): PositionSnapshot[] {
     .prepare("select * from positions where createdAt<=? order by ticker")
     .all(bound(asOf)) as Position[];
 
-  // Held positions at `asOf` — a closed position is "open" again when you rewind.
-  const held = rows.filter((p) => sharesAt(p.id, asOf) > 0.0001);
-  const total = held.reduce((sum, p) => {
-    const price = priceAt(p.id, asOf);
-    return sum + (price !== null ? sharesAt(p.id, asOf) * price : 0);
-  }, 0);
+  // Snapshot once with a zero total, then fill weights in — the previous version
+  // recomputed shares three times and the price twice for every held position.
+  const first = rows.map((p) => snapshot(p, asOf, 0));
+  const total = first.reduce((s, x) => s + x.value, 0);
+  for (const p of first) p.weightPct = total > 0 ? (p.value / total) * 100 : 0;
 
-  return rows
-    .map((p) => snapshot(p, asOf, total))
-    .sort((a, b) => b.value - a.value || a.ticker.localeCompare(b.ticker));
+  return first.sort((a, b) => b.value - a.value || a.ticker.localeCompare(b.ticker));
 }
 
 export function getPositionSnapshot(id: string, asOf?: string): PositionSnapshot | null {
   // No createdAt bound here on purpose. Replaying the decision to *open* a
   // position has to be able to name the instrument, even though at that instant
-  // the size, thesis and evidence are all still empty — and those are bounded.
+  // the size and holdings are still empty — and those are bounded.
   const p = getDb().prepare("select * from positions where id=?").get(id) as Position | undefined;
   if (!p) return null;
   const total = listPositions(asOf).reduce((s, x) => s + x.value, 0);
   return snapshot(p, asOf, total);
-}
-
-/** True status at `asOf` — rewinding un-closes a position that had not been sold yet. */
-export function statusAt(p: PositionSnapshot, asOf?: string): Position["status"] {
-  if (p.status === "passed") return "passed";
-  if (p.shares > 0.0001) return "open";
-  if (asOf && p.closedAt && p.closedAt > asOf) return "watching";
-  return p.status === "open" ? "watching" : p.status;
 }
 
 // ── evidence, decisions, events ───────────────────────────────────────────
@@ -231,16 +316,23 @@ export function listEvidence(positionId: string, opts: { asOf?: string; after?: 
 }
 
 export function listDecisions(
-  opts: { asOf?: string; positionId?: string; after?: string } = {}
+  opts: { asOf?: string; positionId?: string | null; after?: string } = {}
 ): Decision[] {
+  // One definition of "provided", used for both the clause and the parameters.
+  // Previously the clause tested truthiness while the parameter list filtered on
+  // `!== undefined`, so a defined-but-empty positionId bound a value with no
+  // placeholder to receive it and SQLite threw.
+  const params: string[] = [bound(opts.asOf), opts.after ?? ""];
+  let clause = "";
+  if (opts.positionId) {
+    clause = "and positionId=?";
+    params.push(opts.positionId);
+  }
   const rows = getDb()
     .prepare(
-      `select * from decisions where occurredAt<=? and occurredAt>?
-       ${opts.positionId ? "and positionId=?" : ""} order by occurredAt desc`
+      `select * from decisions where occurredAt<=? and occurredAt>? ${clause} order by occurredAt desc`
     )
-    .all(
-      ...([bound(opts.asOf), opts.after ?? "", opts.positionId].filter((v) => v !== undefined) as string[])
-    ) as Record<string, unknown>[];
+    .all(...params) as Record<string, unknown>[];
   return rows.map((r) => toDecision(r, opts.asOf));
 }
 
@@ -256,16 +348,17 @@ export function getDecision(id: string, asOf?: string): Decision | null {
  * an event you have prepared for is part of your world before it happens.
  */
 export function listEvents(
-  opts: { asOf?: string; positionId?: string; status?: "upcoming" | "resolved" } = {}
+  opts: { asOf?: string; positionId?: string | null; status?: "upcoming" | "resolved" } = {}
 ): CatalystEvent[] {
+  const params: string[] = [bound(opts.asOf)];
+  let clause = "";
+  if (opts.positionId) {
+    clause = "and positionId=?";
+    params.push(opts.positionId);
+  }
   const rows = getDb()
-    .prepare(
-      `select * from events where knownAt<=? ${opts.positionId ? "and positionId=?" : ""} order by occurredAt`
-    )
-    .all(...([bound(opts.asOf), opts.positionId].filter((v) => v !== undefined) as string[])) as Record<
-    string,
-    unknown
-  >[];
+    .prepare(`select * from events where knownAt<=? ${clause} order by occurredAt`)
+    .all(...params) as Record<string, unknown>[];
   const evs = rows.map((r) => toEvent(r, opts.asOf));
   return opts.status ? evs.filter((e) => e.status === opts.status) : evs;
 }
@@ -338,23 +431,34 @@ export function getTimeline(
 
 // ── beliefs ───────────────────────────────────────────────────────────────
 
-export function listBeliefs(): Belief[] {
-  return getDb().prepare("select * from beliefs order by name").all() as Belief[];
+export function listBeliefs(asOf?: string): Belief[] {
+  return getDb()
+    .prepare("select * from beliefs where createdAt<=? order by name")
+    .all(bound(asOf)) as Belief[];
 }
 
 export function getBelief(id: string): Belief | null {
   return (getDb().prepare("select * from beliefs where id=?").get(id) as Belief) ?? null;
 }
 
-export function beliefsForPosition(positionId: string): Array<PositionBelief & { belief: Belief }> {
+/**
+ * Bounded on the link's own `occurredAt`. Without this, a belief you connected
+ * to a position today shows up inside a Replay room sealed to a past date —
+ * along with the sentence you wrote today explaining the connection.
+ */
+export function beliefsForPosition(
+  positionId: string,
+  asOf?: string
+): Array<PositionBelief & { belief: Belief }> {
   return getDb()
     .prepare(
       `select pb.*, b.name as b_name, b.description as b_description, b.stance as b_stance,
               b.confidence as b_confidence, b.createdAt as b_createdAt
        from position_beliefs pb join beliefs b on b.id=pb.beliefId
-       where pb.positionId=? order by case pb.sensitivity when 'high' then 0 when 'medium' then 1 else 2 end`
+       where pb.positionId=? and pb.occurredAt<=? and b.createdAt<=?
+       order by case pb.sensitivity when 'high' then 0 when 'medium' then 1 else 2 end`
     )
-    .all(positionId)
+    .all(positionId, bound(asOf), bound(asOf))
     .map((r) => {
       const row = r as Record<string, unknown>;
       return {
@@ -363,6 +467,7 @@ export function beliefsForPosition(positionId: string): Array<PositionBelief & {
         beliefId: row.beliefId as string,
         relationship: row.relationship as string | null,
         sensitivity: row.sensitivity as PositionBelief["sensitivity"],
+        occurredAt: row.occurredAt as string,
         belief: {
           id: row.beliefId as string,
           name: row.b_name as string,
@@ -380,9 +485,16 @@ export function getBeliefExposure(asOf?: string): BeliefExposure[] {
   const positions = listPositions(asOf);
   const byId = new Map(positions.map((p) => [p.id, p]));
   const total = positions.reduce((s, p) => s + p.value, 0);
-  const links = getDb().prepare("select * from position_beliefs").all() as PositionBelief[];
+  // Link membership is bounded too, not just the values it is multiplied by.
+  const links = getDb()
+    .prepare("select * from position_beliefs where occurredAt<=?")
+    .all(bound(asOf)) as PositionBelief[];
+  // Hoisted out of the map: this used to run one listEvents plus one
+  // eventBeliefIds per event per belief — 42 queries on the demo book.
+  const events = listEvents({ asOf });
+  const eventBeliefs = new Map(events.map((e) => [e.id, eventBeliefIds(e.id, asOf)]));
 
-  return listBeliefs()
+  return listBeliefs(asOf)
     .map((belief) => {
       const mine = links.filter((l) => l.beliefId === belief.id && byId.has(l.positionId));
       const held = mine.filter((l) => (byId.get(l.positionId)?.value ?? 0) > 0);
@@ -397,25 +509,27 @@ export function getBeliefExposure(asOf?: string): BeliefExposure[] {
         value,
         weightPct: total > 0 ? (value / total) * 100 : 0,
         highSensitivityWeightPct: total > 0 ? (highValue / total) * 100 : 0,
-        events: listEvents({ asOf }).filter((e) => eventBeliefIds(e.id).includes(belief.id)),
+        events: events.filter((e) => (eventBeliefs.get(e.id) ?? []).includes(belief.id)),
       };
     })
     .sort((a, b) => b.weightPct - a.weightPct || b.heldCount - a.heldCount);
 }
 
-export function eventBeliefIds(eventId: string): string[] {
+export function eventBeliefIds(eventId: string, asOf?: string): string[] {
   return (
-    getDb().prepare("select beliefId from event_beliefs where eventId=?").all(eventId) as Array<{
-      beliefId: string;
-    }>
+    getDb()
+      .prepare("select beliefId from event_beliefs where eventId=? and occurredAt<=?")
+      .all(eventId, bound(asOf)) as Array<{ beliefId: string }>
   ).map((r) => r.beliefId);
 }
 
 /** Positions an event reaches indirectly, through the beliefs it touches. */
 export function eventReach(eventId: string, asOf?: string) {
-  const beliefIds = eventBeliefIds(eventId);
+  const beliefIds = eventBeliefIds(eventId, asOf);
   if (beliefIds.length === 0) return [];
-  const links = getDb().prepare("select * from position_beliefs").all() as PositionBelief[];
+  const links = getDb()
+    .prepare("select * from position_beliefs where occurredAt<=?")
+    .all(bound(asOf)) as PositionBelief[];
   const held = new Map(listPositions(asOf).filter((p) => p.value > 0).map((p) => [p.id, p]));
   const seen = new Map<string, { position: PositionSnapshot; via: string[] }>();
   for (const l of links) {
@@ -433,6 +547,8 @@ export function eventReach(eventId: string, asOf?: string) {
 
 const DAY = 86_400_000;
 const STALE_DAYS = 75;
+/** Below this, a "pattern" is an anecdote. Every card is gated on it. */
+const MIN_N = 3;
 
 /**
  * Surfaces tension. Deliberately never claims a thesis is right or wrong —
@@ -467,7 +583,7 @@ export function getAttentionItems(asOf?: string): AttentionItem[] {
             ? `${p.ticker}: a piece of evidence stands against your assumptions, recorded after your last thesis update`
             : `${p.ticker}: ${contradictions.length} pieces of evidence stand against your assumptions, recorded after your last thesis update`,
         detail: names.length
-          ? `Affected: ${[...new Set(names)].map((n) => `“${n}”`).join("; ")}. Thesis v${thesis.versionNo} was written ${daysBetween(thesis.occurredAt, nowIso)} days ago and has not been revisited since this evidence arrived.`
+          ? `Affected: ${[...new Set(names)].map((n) => `“${n}”`).join("; ")}. Thesis v${thesis.versionNo} was written ${span(thesis.occurredAt, nowIso)} ago and has not been revisited since this evidence arrived.`
           : `Thesis v${thesis.versionNo} predates this evidence.`,
         href: `/positions/${p.id}`,
         question: "Does the thesis still say what you believe, or is it just the last version you wrote?",
@@ -497,7 +613,7 @@ export function getAttentionItems(asOf?: string): AttentionItem[] {
         severity: "low",
         kind: "Not reviewed",
         positionId: p.id,
-        headline: `${p.ticker}: nothing recorded for ${daysBetween(last, nowIso)} days`,
+        headline: `${p.ticker}: nothing recorded for ${span(last, nowIso)}`,
         detail: `Last entry of any kind was ${fmtDate(last)}. The book has moved since.`,
         href: `/positions/${p.id}`,
         question: "Is nothing happening, or are you not looking?",
@@ -513,7 +629,7 @@ export function getAttentionItems(asOf?: string): AttentionItem[] {
         severity: "high",
         kind: "Catalyst passed",
         positionId: ev.positionId ?? undefined,
-        headline: `“${ev.title}” happened ${daysBetween(ev.occurredAt, nowIso)} days ago and has no outcome recorded`,
+        headline: `“${ev.title}” happened ${span(ev.occurredAt, nowIso)} ago and has no outcome recorded`,
         detail:
           "You wrote down what you expected before it. Comparing that to what actually happened is the only part that teaches you anything — and it decays fast.",
         href: `/events/${ev.id}`,
@@ -594,20 +710,30 @@ export function getPatterns(asOf?: string): Pattern[] {
   const resolved = decisions.filter((d) => d.outcomeVerdict);
   const events = listEvents({ asOf }).filter((e) => e.outcome);
 
-  // Confidence vs realised outcome.
+  // Confidence vs realised outcome. Needs enough decisions in both buckets to
+  // be worth stating at all — two decisions cannot establish a tendency.
   const buckets = getCalibration(asOf);
   const high = buckets.filter((b) => b.confidence >= 4);
   const mid = buckets.filter((b) => b.confidence === 3);
-  if (high.length && mid.length) {
+  const hN = high.reduce((s, b) => s + b.count, 0);
+  const mN = mid.reduce((s, b) => s + b.count, 0);
+  if (hN >= MIN_N && mN >= MIN_N) {
     const hRate = weighted(high);
     const mRate = weighted(mid);
     if (hRate <= mRate + 5) {
+      const strictlyWorse = hRate < mRate;
       out.push({
         id: "pat_calibration",
-        title: "Your confidence does not sort your outcomes",
-        finding: `Decisions you rated 4–5 out of 5 realised ${Math.round(hRate)}% of what you hoped for. Decisions you rated 3 realised ${Math.round(mRate)}%. Higher stated conviction has not produced better results in this book.`,
+        title: strictlyWorse
+          ? "Your confidence does not sort your outcomes"
+          : "Your confidence barely sorts your outcomes",
+        finding: `Decisions you rated 4–5 out of 5 (n=${hN}) realised ${Math.round(hRate)}% of what you hoped for. Decisions you rated 3 (n=${mN}) realised ${Math.round(mRate)}%. ${
+          strictlyWorse
+            ? "Higher stated conviction has produced worse results in this book."
+            : "The gap is inside the noise a book this small can resolve."
+        }`,
         soWhat:
-          "Confidence is currently a measure of how much you like the idea, not of how likely it is. Until that changes, using it to size positions transmits enthusiasm into risk.",
+          "Confidence is currently closer to a measure of how much you like the idea than of how likely it is. Until it separates outcomes, using it to size positions transmits enthusiasm into risk.",
         evidence: [...high, ...mid].flatMap((b) => b.decisions),
       });
     }
@@ -621,33 +747,55 @@ export function getPatterns(asOf?: string): Pattern[] {
   });
   if (addsIntoWeakness.length > 0) {
     const bad = addsIntoWeakness.filter((d) => d.outcomeVerdict === "did_not_work");
+    const clean = adds.filter((d) => !addsIntoWeakness.includes(d));
+    const cleanBad = clean.filter((d) => d.outcomeVerdict === "did_not_work");
     out.push({
       id: "pat_add_weak",
       title: "You add when the thesis is already weakening",
-      finding: `${addsIntoWeakness.length} of your ${adds.length} adds were made into a thesis that already had two or more assumptions marked as weakening${bad.length ? `, and ${bad.length === addsIntoWeakness.length ? "every one" : `${bad.length}`} of those you later judged did not work` : ""}. Your adds into intact theses have a different record.`,
+      finding:
+        `${addsIntoWeakness.length} of your ${adds.length} add${adds.length === 1 ? "" : "s"} ${addsIntoWeakness.length === 1 ? "was" : "were"} made into a thesis that already had two or more assumptions no longer intact` +
+        (bad.length
+          ? `, and ${bad.length === addsIntoWeakness.length ? (addsIntoWeakness.length === 1 ? "you later judged it" : "you later judged every one of them") : `${bad.length} of those you later judged`} did not work`
+          : "") +
+        `. ${
+          clean.length === 0
+            ? "You have no adds into a fully intact thesis to compare against."
+            : `Of your ${clean.length} add${clean.length === 1 ? "" : "s"} into an intact thesis, ${cleanBad.length} did not work.`
+        }`,
       soWhat:
-        "The add conditions in your theses are written as price levels. A price level and a weakening assumption set can be satisfied at the same time, which is exactly when adding feels most obvious and is least justified.",
+        "An add condition written as a price level and a weakening assumption set can be satisfied at the same moment — which is exactly when adding feels most obvious and is least justified.",
       evidence: addsIntoWeakness,
     });
   }
 
-  // Reducing what you later wished you had kept.
+  // Reductions recorded without a stated reversal condition. Deliberately does
+  // not claim anything about whether trim conditions were met — that used to be
+  // asserted in prose and was not computed.
   const cuts = decisions.filter((d) => d.type === "reduce" || d.type === "exit");
+  const noTrigger = cuts.filter((d) => (d.reversalTrigger ?? "").trim().length === 0);
   const regrettedCuts = cuts.filter((d) => d.outcomeVerdict === "did_not_work");
-  const sizingCuts = cuts.filter((d) => !d.reversalTrigger || /none stated/i.test(d.reversalTrigger));
-  if (regrettedCuts.length > 0 || sizingCuts.length > 0) {
+  if (cuts.length >= MIN_N && (noTrigger.length > 0 || regrettedCuts.length > 0)) {
+    const parts: string[] = [];
+    if (noTrigger.length)
+      parts.push(
+        `${noTrigger.length} of ${cuts.length} recorded no condition that would reverse ${noTrigger.length === 1 ? "it" : "them"}`
+      );
+    if (regrettedCuts.length)
+      parts.push(
+        `${regrettedCuts.length} you later judged did not work`
+      );
     out.push({
       id: "pat_cut_early",
-      title: "Your trims are sizing decisions dressed as thesis decisions",
-      finding: `${sizingCuts.length} of ${cuts.length} reduction${cuts.length === 1 ? "" : "s"} ${sizingCuts.length === 1 ? "was" : "were"} recorded with no reversal trigger${regrettedCuts.length ? `, and ${regrettedCuts.length} you later judged did not work` : ""}. In at least one case the written trim condition had not actually been met at the time.`,
+      title: "Your reductions are the least reviewable decisions you make",
+      finding: `Across ${cuts.length} reductions and exits, ${parts.join(", and ")}.`,
       soWhat:
-        "Discomfort with position size is a legitimate reason to trim. It is not the same reason as the thesis changing, and recording it as though it were makes the trim unreviewable later.",
-      evidence: [...new Set([...regrettedCuts, ...sizingCuts])],
+        "Discomfort with position size is a legitimate reason to trim. It is not the same reason as the thesis changing, and a reduction with no reversal condition cannot be reviewed later — only defended.",
+      evidence: [...new Set([...regrettedCuts, ...noTrigger])],
     });
   }
 
   // Business forecasts vs market reactions.
-  if (events.length >= 2) {
+  if (events.length >= MIN_N) {
     const rightVars = events.filter((e) => e.outcome!.rightVariables === "yes").length;
     const rightCall = events.filter((e) => e.outcome!.forecastAccurate === "yes").length;
     const surprised = events.filter((e) => e.outcome!.reactionSurprising !== "no").length;
@@ -664,23 +812,33 @@ export function getPatterns(asOf?: string): Pattern[] {
     }
   }
 
-  // Plans written and then not followed.
+  // Plans written and then not followed. The action that was skipped is read out
+  // of the scenarios rather than assumed.
   const notFollowed = events.filter((e) => e.outcome!.followedPlan !== "yes");
-  if (notFollowed.length > 0) {
+  if (notFollowed.length > 0 && events.length >= MIN_N) {
+    const skipped = notFollowed
+      .flatMap((e) => e.scenarios.map((s) => s.plannedAction ?? ""))
+      .filter((a) => /\b(cut|reduce|trim|sell|exit|half position)\b/i.test(a));
     out.push({
       id: "pat_plan_drift",
-      title: "The plans you break are the ones that would have cost you something",
-      finding: `In ${notFollowed.length} of ${events.length} resolved events you did not follow the action you had written down beforehand. In each case the pre-written action was to reduce.`,
+      title: "The plans you break are the ones that ask you to act",
+      finding:
+        `In ${notFollowed.length} of ${events.length} resolved events you did not follow the action you had written down beforehand.` +
+        (skipped.length
+          ? ` ${skipped.length === notFollowed.length ? "In each case" : `In ${skipped.length} of them`} the pre-written action involved reducing the position.`
+          : ""),
       soWhat:
-        "Your process holds when it asks you to do nothing and slips when it asks you to sell. That is a specific, fixable failure — it is not a discipline problem in general.",
+        "A process that holds when it asks you to do nothing and slips when it asks you to sell is a specific, fixable failure — not a discipline problem in general.",
       evidence: [],
       events: notFollowed,
     });
   }
 
-  // Decisions left hanging.
+  // Decisions left hanging. Bounded by `asOf` like everything else in this file,
+  // so rendering the page at a past date does not leak the present.
+  const nowMs = new Date(asOf ?? new Date().toISOString()).getTime();
   const unresolved = decisions.filter(
-    (d) => !d.outcomeVerdict && new Date(d.occurredAt).getTime() < Date.now() - 60 * DAY
+    (d) => !d.outcomeVerdict && new Date(d.occurredAt).getTime() < nowMs - 60 * DAY
   );
   if (unresolved.length > 0) {
     out.push({
@@ -725,36 +883,50 @@ export function listReplayAttempts(decisionId: string): ReplayAttempt[] {
 }
 
 /**
- * Splits the world at a decision. `sealed` is everything that existed strictly
- * before the decision was taken; `after` is everything the user is not allowed
- * to see until they have committed to an answer.
+ * Splits the world at a decision, along two different bounds — which is the
+ * whole subtlety of this feature.
+ *
+ *   `market` (inclusive of the instant) — prices, evidence, events, and the
+ *     thesis. All of it genuinely was knowable when the decision was taken, so
+ *     hiding it makes the room emptier than the moment really was. Before this
+ *     split, four of the demo's sealed rooms rendered completely blank and
+ *     "Mark that day" showed the *previous* mark rather than the fill.
+ *
+ *   `own` (exclusive, 1 ms earlier) — the position size and the decision
+ *     itself. These are the act being replayed; showing them gives the answer.
+ *
+ * The one exception is a `thesis_change`, where the same-instant thesis version
+ * *is* the decision's product and has to be sealed with it.
  */
 export function getReplayContext(decisionId: string): ReplayContext | null {
   const decision = getDecision(decisionId);
   if (!decision) return null;
-  const asOf = justBefore(decision.occurredAt);
+  const market = decision.occurredAt;
+  const own = justBefore(decision.occurredAt);
+  const thesisBound = decision.type === "thesis_change" ? own : market;
 
-  const position = decision.positionId ? getPositionSnapshot(decision.positionId, asOf) : null;
-  const positionsThen = listPositions(asOf).filter(
-    (p) => p.shares > 0.0001 || p.id === decision.positionId
+  const position = decision.positionId ? getPositionSnapshot(decision.positionId, own) : null;
+  const positionsThen = listPositions(own).filter(
+    (p) => p.shares > EPS || p.id === decision.positionId
   );
 
-  const upcoming = listEvents({ asOf })
-    .filter((e) => e.occurredAt > asOf)
+  const upcoming = listEvents({ asOf: market })
+    .filter((e) => e.occurredAt > market)
     .filter((e) => !decision.positionId || e.positionId === decision.positionId || e.positionId === null);
 
-  const priceThen = position ? priceAt(position.id, asOf) : null;
+  const priceThen = position ? priceAt(position.id, market) : null;
   const priceNow = position ? priceAt(position.id) : null;
 
   return {
     decision,
-    asOf,
+    asOf: own,
+    marketAsOf: market,
     position,
     positionsThen,
-    thesisThen: decision.positionId ? getThesisAt(decision.positionId, asOf) : null,
-    evidenceThen: decision.positionId ? listEvidence(decision.positionId, { asOf }) : [],
+    thesisThen: decision.positionId ? getThesisAt(decision.positionId, thesisBound) : null,
+    evidenceThen: decision.positionId ? listEvidence(decision.positionId, { asOf: market }) : [],
     upcomingThen: upcoming,
-    beliefsThen: decision.positionId ? beliefsForPosition(decision.positionId) : [],
+    beliefsThen: decision.positionId ? beliefsForPosition(decision.positionId, market) : [],
     priceThen,
     priceNow,
     priceChangePct: priceThen && priceNow ? (priceNow / priceThen - 1) * 100 : null,
@@ -769,8 +941,14 @@ export function getReplayContext(decisionId: string): ReplayContext | null {
 
 // ── small shared formatters used inside generated copy ────────────────────
 
+/** Signed, so a reversed pair shows up as a negative rather than silently as 0. */
 export function daysBetween(a: string, b: string) {
-  return Math.max(0, Math.round((new Date(b).getTime() - new Date(a).getTime()) / DAY));
+  return Math.round((new Date(b).getTime() - new Date(a).getTime()) / DAY);
+}
+
+/** "16 days" / "1 month" / "1.4 years" — never "1 days". */
+function span(a: string, b: string) {
+  return describeSpan(Math.abs(new Date(b).getTime() - new Date(a).getTime()));
 }
 
 function fmtPct(n: number) {

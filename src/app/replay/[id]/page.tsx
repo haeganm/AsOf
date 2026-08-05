@@ -314,6 +314,10 @@ export default async function ReplayRoom({
     ...(ctx.priceThen !== null ? [ctx.priceThen] : []),
     ...ctx.marksAfter.map((m) => m.price),
   ];
+  const pricePathAt = [
+    ...(ctx.priceThen !== null ? [decision.occurredAt] : []),
+    ...ctx.marksAfter.map((m) => m.occurredAt),
+  ];
   const peak = ctx.marksAfter.length ? Math.max(...ctx.marksAfter.map((m) => m.price)) : null;
   const trough = ctx.marksAfter.length ? Math.min(...ctx.marksAfter.map((m) => m.price)) : null;
 
@@ -411,9 +415,9 @@ export default async function ReplayRoom({
           )}
         </div>
 
-        {pricePath.length > 2 && (
+        {pricePath.length >= 2 && (
           <div className="mb-9">
-            <Spark points={pricePath} width={640} height={80} />
+            <Spark points={pricePath} at={pricePathAt} width={640} height={80} />
             <div className="num mt-1 flex justify-between text-[10.5px] text-ink-4">
               <span>{sealedDate}</span>
               <span>today</span>
