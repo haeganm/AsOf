@@ -47,8 +47,11 @@ npm run dev                 # dev server, seeds on first run
 npm run build && npm start  # production
 npm test                    # as-of correctness: bounds, thesis versioning, the Replay seal
 npm run seed -- --force     # rebuild the demo book from scratch
-npx tsx scripts/smoke.ts    # drives the whole loop in a real browser (needs `npx playwright install chromium`)
+npm run check:console       # loads all 30 routes, fails on any console error or warning
+npm run check:flow          # drives the whole decision loop in a real browser
 ```
+
+`npm test` needs nothing but Node. The two `check:` scripts drive a real browser against a running dev server, so they need `npx playwright install chromium` once. `check:flow` writes to your database — run `npm run seed -- --force` afterwards to restore the demo book.
 
 `npm test` is the one that matters: if the as-of bound leaks, Replay is a lie. It asserts that nothing dated after a decision reaches its sealed context, that thesis versions resolve to the version in force on a date, and that outcomes stay hidden until they existed.
 

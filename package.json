@@ -9,7 +9,9 @@
     "prestart": "tsx scripts/seed.ts",
     "start": "next start",
     "seed": "tsx scripts/seed.ts",
-    "test": "tsx scripts/test-asof.ts"
+    "test": "tsx scripts/test-asof.ts",
+    "check:console": "tsx scripts/console-check.ts",
+    "check:flow": "tsx scripts/smoke.ts"
   },
   "dependencies": {
     "better-sqlite3": "^11.10.0",
