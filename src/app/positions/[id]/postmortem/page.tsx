@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { createPostmortem } from "@/lib/actions";
 import { getPositionSnapshot, listDecisions, listThesisVersions } from "@/lib/queries";
-import { shortDate, signedPct } from "@/lib/format";
+import { shortDate, signedPct, truncate } from "@/lib/format";
 import { ChipRadio, FormBlock, Prose, VerdictPicker } from "@/components/forms";
 import { ActionForm } from "@/components/action-form";
 import { PageHeader } from "@/components/ui";
@@ -94,7 +94,7 @@ export default async function NewPostmortemPage({ params }: { params: Promise<{ 
                 <option value="">The position as a whole</option>
                 {decisions.map((d) => (
                   <option key={d.id} value={d.id}>
-                    {shortDate(d.occurredAt)} — {d.what.slice(0, 90)}
+                    {shortDate(d.occurredAt)} — {truncate(d.what, 88)}
                   </option>
                 ))}
               </select>

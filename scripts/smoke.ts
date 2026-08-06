@@ -66,6 +66,19 @@ const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString
  * when the action redirects back to a path the browser already matches — it
  * resolves instantly against the pre-submit page.
  */
+/** Types into the instrument search and clicks the matching result. */
+async function pickSecurity(page: Page, query: string, ticker: string) {
+  await page.fill('input[aria-describedby="picker-hint"]', query);
+  const row = page.locator(`button:has(span:text-is("${ticker}"))`).first();
+  await row.waitFor({ timeout: 15_000 });
+  await row.click();
+  await page.waitForFunction(
+    (t) => (document.querySelector('[name="ticker"]') as HTMLInputElement)?.value === t,
+    ticker,
+    { timeout: 10_000 }
+  );
+}
+
 async function submit(page: Page, expect: string) {
   await page.click("[data-primary-submit]");
   await page.waitForFunction(
@@ -129,19 +142,19 @@ async function main() {
 
   console.log("\nwrite paths");
 
-  await step("the ticker picker finds a real security and prefills it", async () => {
-    const found = await visit(page, "/positions/new?q=constellation", "14b-ticker-search");
-    has(found, "CEG", "ticker search results");
-    has(found, "Constellation", "ticker search results");
-    // Choosing a match carries ticker, name and CIK into the form.
-    await page.click('a[href*="ticker=CEG"]');
-    await page.waitForFunction(
-      () => (document.querySelector('[name="ticker"]') as HTMLInputElement)?.value === "CEG"
-    );
+  await step("the ticker picker finds a security without losing what you typed", async () => {
+    await visit(page, "/positions/new", "14b-ticker-search");
+    // Write the thesis first: searching must not disturb it.
+    const thesis = "Smoke test: the search must not wipe this sentence.";
+    await page.fill('[name="summary"]', thesis);
+
+    await pickSecurity(page, "constellation", "CEG");
     const cik = await page.inputValue('input[name="cik"]');
     if (!/^\d{10}$/.test(cik)) throw new Error(`expected a 10-digit CIK, got "${cik}"`);
     const name = await page.inputValue('[name="name"]');
     if (!/constellation/i.test(name)) throw new Error(`name not prefilled: "${name}"`);
+    if ((await page.inputValue('[name="summary"]')) !== thesis)
+      throw new Error("searching for a ticker wiped the thesis");
   });
 
   let newPositionUrl = "";
@@ -304,8 +317,8 @@ async function main() {
   await step("a real security is created with real price history", async () => {
     // Deliberately not a ticker the demo book already holds — the duplicate
     // guard would (correctly) refuse that.
-    await visit(page, "/positions/new?q=vertiv");
-    await page.click('a[href*="ticker=VRT"]');
+    await visit(page, "/positions/new");
+    await pickSecurity(page, "vertiv", "VRT");
     await page.fill('[name="summary"]', "Smoke test: thermal management is the gating constraint.");
     await page.fill('[name="shares"]', "10");
     await page.fill('[name="price"]', "50");

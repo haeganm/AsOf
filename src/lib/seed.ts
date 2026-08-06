@@ -234,6 +234,7 @@ export function seedDatabase(db: DatabaseType.Database) {
     ["pos_nvda", "bl_packaging", "Packaging scarcity is what keeps pricing and share intact against merchant silicon.", "high"],
     ["pos_ceg", "bl_aicapex", "Data-center load growth is the demand side of the power-price thesis.", "high"],
     ["pos_ceg", "bl_reg", "The thesis only monetises if regulators let large-load pricing through.", "high"],
+    ["pos_ceg", "bl_rates", "A capital-intensive generator is discounted like a bond whether or not I hold a rate view.", "medium"],
     ["pos_fcx", "bl_aicapex", "Grid and transformer copper intensity is the incremental demand I am paid for.", "medium"],
     ["pos_fcx", "bl_china", "China is the swing factor on the base copper price I did not underwrite.", "high"],
     ["pos_dlr", "bl_aicapex", "Leasing spreads are a direct read on shell demand.", "high"],

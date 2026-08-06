@@ -89,6 +89,14 @@ export function describeSpan(ms: number) {
   return `${years} year${years === 1 ? "" : "s"}`;
 }
 
+/** Cuts on a word boundary and says so, rather than stopping mid-word. */
+export function truncate(text: string, max: number) {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  const lastSpace = cut.lastIndexOf(" ");
+  return `${(lastSpace > max * 0.6 ? cut.slice(0, lastSpace) : cut).replace(/[,;:.\s]+$/, "")}…`;
+}
+
 export const VERDICT_LABEL: Record<string, string> = {
   yes: "Yes",
   partly: "Partly",

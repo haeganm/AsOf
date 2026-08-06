@@ -35,9 +35,8 @@ function Calibration({ buckets }: { buckets: ReturnType<typeof getCalibration> }
           strokeWidth="1"
           strokeDasharray="3 3"
         />
-        <text x={x(4.1)} y={y(84)} fontSize="9" fill="#9b9b95" fontStyle="italic">
-          an evenly ordered scale
-        </text>
+        {/* No in-chart label: it sat on top of the line it described. The
+            caption below carries the explanation instead. */}
 
         {[1, 2, 3, 4, 5].map((c) => (
           <text key={c} x={x(c)} y={H - pad.b + 16} textAnchor="middle" fontSize="10" fill="#6d6d68" fontFamily="ui-monospace, monospace">
@@ -83,8 +82,8 @@ function Calibration({ buckets }: { buckets: ReturnType<typeof getCalibration> }
       </svg>
       <figcaption className="mt-3 max-w-[62ch] text-[11.5px] leading-relaxed text-ink-3">
         Dot size is the number of decisions in that bucket. A decision you judged “mixed” counts as
-        half. The dashed line is only a convention for what an evenly ordered scale would look like —
-        what matters is whether your dots rise from left to right at all.
+        half. The dashed diagonal is only a convention for what an evenly ordered 1–5 scale would
+        look like, not a target — what matters is whether your dots rise from left to right at all.
       </figcaption>
     </figure>
   );
