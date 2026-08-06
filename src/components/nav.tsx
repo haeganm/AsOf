@@ -3,11 +3,16 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-const ITEMS: Array<[string, string, string]> = [
-  ["/", "Today", "What needs judgment"],
+// The engine (collect → grade → base rates) leads; the journal — the original
+// decision-record app — is one signal source among several, and reads that way.
+const ENGINE: Array<[string, string, string]> = [
+  ["/", "Today", "What fired, what needs judgment"],
   ["/scorecard", "Scorecard", "What actually works"],
   ["/studies", "Studies", "What usually happens next"],
   ["/signals", "Signals", "Everything collected"],
+];
+
+const JOURNAL: Array<[string, string, string]> = [
   ["/positions", "Positions", "Why you own each one"],
   ["/decisions", "Decisions", "What you did and why"],
   ["/events", "Events", "Expectation vs reality"],
@@ -21,7 +26,7 @@ export function MobileNav() {
   const pathname = usePathname();
   return (
     <nav className="-mx-6 mb-8 flex gap-1 overflow-x-auto border-b border-rule px-6 pb-3 lg:hidden">
-      {ITEMS.map(([href, label]) => {
+      {[...ENGINE, ...JOURNAL].map(([href, label]) => {
         const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
         return (
           <Link
@@ -39,11 +44,11 @@ export function MobileNav() {
   );
 }
 
-export function Nav() {
+function NavGroup({ items }: { items: Array<[string, string, string]> }) {
   const pathname = usePathname();
   return (
-    <nav className="space-y-[2px]">
-      {ITEMS.map(([href, label, hint]) => {
+    <div className="space-y-[2px]">
+      {items.map(([href, label, hint]) => {
         const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
         return (
           <Link
@@ -62,6 +67,16 @@ export function Nav() {
           </Link>
         );
       })}
+    </div>
+  );
+}
+
+export function Nav() {
+  return (
+    <nav>
+      <NavGroup items={ENGINE} />
+      <div className="label mb-1 mt-6 pl-3">Journal</div>
+      <NavGroup items={JOURNAL} />
     </nav>
   );
 }

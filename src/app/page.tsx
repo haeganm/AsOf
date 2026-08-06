@@ -8,9 +8,48 @@ import {
   listPositions,
   eventReach,
 } from "@/lib/queries";
+import {
+  aggregateSignals,
+  kindLabel,
+  listSignals,
+  sourceLabel,
+  MIN_FOR_CLAIM,
+  type Signal,
+} from "@/lib/signals";
 import { money, pct, relativeDays, shortDate, signedPct } from "@/lib/format";
 import { AttentionQueue } from "@/components/attention";
 import { Bar, ButtonLink, ConfidenceMeter, PageHeader, Section, Stat } from "@/components/ui";
+
+/** What fired recently, each with its class's historical base rate beside it. */
+function FiredList({ signals }: { signals: Signal[] }) {
+  const studies = aggregateSignals("kind", { includeBackfilled: true });
+  const baseRate = (kind: string): string => {
+    const rows = studies.find((g) => g.key === kind)?.rows ?? [];
+    const at20 = rows.find((r) => r.horizonDays === 20);
+    if (!at20) return "no graded history for this kind yet";
+    if (at20.n < MIN_FOR_CLAIM) return `${at20.n} graded case${at20.n === 1 ? "" : "s"} on file — too few for a base rate`;
+    return `across ${at20.n.toLocaleString("en-US")} cases, median ${signedPct(at20.medianExcess * 100)} vs SPY at 20 days`;
+  };
+
+  return (
+    <ol className="divide-y divide-rule/60 border-t border-rule">
+      {signals.map((s) => (
+        <li key={s.id} className="flex flex-wrap items-baseline gap-x-4 gap-y-1 py-3">
+          <span className="w-[64px] shrink-0 font-medium">{s.symbol}</span>
+          <span className="min-w-0 flex-1">
+            <Link href={`/signals/${s.id}`} className="text-[13.5px] hover:underline">
+              {s.title}
+            </Link>
+            <span className="mt-0.5 block text-[11.5px] text-ink-4">
+              {sourceLabel(s.source)} · {kindLabel(s.kind)} · {relativeDays(s.knownAt)} —{" "}
+              {baseRate(s.kind)}
+            </span>
+          </span>
+        </li>
+      ))}
+    </ol>
+  );
+}
 
 export default function Dashboard() {
   const portfolio = getPortfolio();
@@ -22,6 +61,11 @@ export default function Dashboard() {
   const decisions = listDecisions();
   const openLoops = decisions.filter((d) => !d.outcomeVerdict);
   const bookValue = held.reduce((s, p) => s + p.value, 0);
+
+  // Live-collected signals from the last two days; imported history never
+  // floods this list because a backfilled row is not news.
+  const since = new Date(Date.now() - 48 * 3_600_000).toISOString();
+  const fired = listSignals({ since, limit: 100 }).filter((s) => s.backfilled === 0).slice(0, 12);
 
   const upcoming = listEvents({ status: "upcoming" })
     .filter((e) => e.occurredAt > new Date().toISOString())
@@ -45,16 +89,35 @@ export default function Dashboard() {
             <>{held.length} positions on the book.</>
           )
         }
-        lede="This page reads your own record rather than the tape. It shows where what you wrote down has drifted from what you now know — and leaves the judgment to you."
+        lede="What fired since yesterday and what usually happens next; then what in your own record needs judgment. The engine collects and grades — deciding stays yours."
         actions={
           <>
             <ButtonLink href="/decisions/new">Record a decision</ButtonLink>
-            <ButtonLink href="/replay" variant="solid">
-              Replay a decision
+            <ButtonLink href="/scorecard" variant="solid">
+              Scorecard
             </ButtonLink>
           </>
         }
       />
+
+      <Section
+        label="What fired"
+        title={
+          fired.length === 0
+            ? "Nothing new in the last two days"
+            : `${fired.length} signal${fired.length === 1 ? "" : "s"} in the last two days`
+        }
+        aside={<Link href="/signals" className="link">All signals</Link>}
+      >
+        {fired.length === 0 ? (
+          <p className="writing text-[13.5px] text-ink-3">
+            The daily refresh keeps collecting — insider buys, filings, monitor firings, imported
+            alerts. New arrivals land here with the historical base rate for their kind beside them.
+          </p>
+        ) : (
+          <FiredList signals={fired} />
+        )}
+      </Section>
 
       <div className="mb-12 grid grid-cols-2 gap-x-8 gap-y-7 border-b border-rule pb-8 sm:grid-cols-4">
         <Stat

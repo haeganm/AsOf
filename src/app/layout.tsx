@@ -11,9 +11,9 @@ import { MobileNav, Nav } from "@/components/nav";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "AsOf — a decision record for investors",
+  title: "AsOf — a self-grading market intelligence engine",
   description:
-    "Records what you knew, believed, expected and decided at each point in time — then helps you manage the book without hindsight.",
+    "Collects signals, seals each at the moment it was knowable, and grades what actually happened next against the index — including your own decisions.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -44,7 +44,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <div className="label mb-1">Viewing as of</div>
               <div className="text-[11.5px] leading-tight text-ink-2">{today}</div>
               <p className="mt-3 text-[10.5px] leading-snug text-ink-4">
-                Local demo book. Sample data, illustrative prices, no market feed.
+                Local only. Demo journal; real prices and filings via the daily refresh.
               </p>
             </div>
           </aside>

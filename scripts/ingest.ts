@@ -17,6 +17,7 @@ import { ensureUniverse, resolveCiks, listUniverse } from "../src/lib/ingest/uni
 import { fetchFilings } from "../src/lib/ingest/filings";
 import { syncInsiders } from "../src/lib/ingest/insiders";
 import { emitEightK } from "../src/lib/ingest/eightk";
+import { sweepInbox } from "../src/lib/ingest/inbox";
 import { startRun, finishRun } from "../src/lib/ingest/runs";
 import { symbolSeriesId, symbolsToTrack } from "../src/lib/correlation-report";
 import { evaluateMonitors } from "../src/lib/monitors";
@@ -167,6 +168,15 @@ async function main() {
       (seeded ? `, ${seeded} watermarks seeded` : "") + (failed ? `, ${failed} companies failed` : "");
     finishRun(run, failed < tracked.length, note);
     console.log(`insiders: ${note}`);
+  }
+
+  // Anything dropped into data/inbox/*.jsonl by a local producer gets sealed
+  // like every other source, then the file is archived.
+  const inbox = sweepInbox();
+  if (inbox.files > 0) {
+    console.log(
+      `inbox: ${inbox.files} file(s) — ${inbox.imported} imported, ${inbox.duplicates} duplicate(s), ${inbox.malformed} malformed`
+    );
   }
 
   // Monitors run after prices: they read the series that were just refreshed.

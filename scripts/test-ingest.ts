@@ -1047,6 +1047,64 @@ check("one signal per (filing, item) — a multi-item 8-K yields one row per lis
   assert.equal(emitted, 2);
 });
 
+// ── the drop-in inbox ─────────────────────────────────────────────────────
+
+console.log("\ninbox importer:");
+
+import { parseInboxLine, sweepInbox } from "../src/lib/ingest/inbox";
+
+check("an inbox line with a New York offset normalises to UTC and namespaces its source", () => {
+  const s = parseInboxLine(
+    JSON.stringify({
+      source: "myscanner",
+      symbol: "nvda",
+      kind: "ORB_Breakout",
+      direction: "long",
+      firedAt: "2026-08-05T09:35:00-04:00",
+    })
+  );
+  assert.equal(s.source, "import:myscanner");
+  assert.equal(s.symbol, "NVDA");
+  assert.equal(s.kind, "orb_breakout");
+  assert.equal(s.firedAt, "2026-08-05T13:35:00.000Z");
+  assert.equal(s.knownAt, s.firedAt, "knownAt defaults to firedAt");
+  assert.match(s.externalId!, /^sig:import:myscanner:/);
+});
+
+check("malformed inbox lines are refused with a reason, never guessed at", () => {
+  assert.throws(() => parseInboxLine(JSON.stringify({ symbol: "A", kind: "k", direction: "long", firedAt: "2026-01-01" })), /source/);
+  assert.throws(() => parseInboxLine(JSON.stringify({ source: "s", symbol: "A", kind: "k", direction: "up", firedAt: "2026-01-01" })), /direction/);
+  assert.throws(() => parseInboxLine(JSON.stringify({ source: "s", symbol: "A", kind: "k", direction: "long", firedAt: "not a date" })), /timestamp/);
+});
+
+check("a dropped file imports, archives, and a re-drop dedupes", () => {
+  const root = path.join(process.cwd(), "data", "test-inbox-root");
+  const dir = path.join(root, "data", "inbox");
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+
+  const lines = [
+    JSON.stringify({ source: "scanner", symbol: "TSTI", kind: "breakout", direction: "long", firedAt: "2026-08-05T09:35:00-04:00" }),
+    JSON.stringify({ source: "scanner", symbol: "TSTI", kind: "breakout", direction: "long", firedAt: "2026-08-05T10:10:00-04:00" }),
+    "{ this is not json",
+  ].join("\n");
+
+  fs.writeFileSync(path.join(dir, "drop.jsonl"), lines);
+  const first = sweepInbox(root);
+  assert.deepEqual(first, { files: 1, imported: 2, duplicates: 0, malformed: 1 });
+  assert.equal(fs.existsSync(path.join(dir, "drop.jsonl")), false, "swept file is archived");
+  assert.equal(fs.readdirSync(path.join(dir, "done")).length, 1);
+
+  fs.writeFileSync(path.join(dir, "drop.jsonl"), lines);
+  const second = sweepInbox(root);
+  assert.equal(second.imported, 0);
+  assert.equal(second.duplicates, 2, "content-hash externalIds dedupe a re-drop");
+
+  const n = (db.prepare("select count(*) as n from signals where source='import:scanner'").get() as { n: number }).n;
+  assert.equal(n, 2);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
 const checkAsync = async (label: string, fn: () => Promise<void>) => {
   try {
     await fn();
