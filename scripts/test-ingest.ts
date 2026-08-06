@@ -1005,6 +1005,48 @@ check("a second distinct insider completes a cluster — once, and growth does n
   assert.equal(clusters(), 2, "a new window can cluster again");
 });
 
+// ── 8-K event signals ─────────────────────────────────────────────────────
+
+console.log("\n8-K event signals:");
+
+import { emitEightK, EIGHTK_ITEMS } from "../src/lib/ingest/eightk";
+
+check("allowlisted 8-K items become signals; noise items never do", () => {
+  const filings = parseSubmissions(load<SubmissionsResponse>("sec-submissions-NVDA.json"));
+  const emitted = emitEightK("NVDA", filings);
+  assert.ok(emitted > 0, "the NVDA fixture contains allowlisted 8-K items");
+
+  const rows = db
+    .prepare("select kind, backfilled, externalId from signals where source='filing' and symbol='NVDA'")
+    .all() as Array<{ kind: string; backfilled: number; externalId: string }>;
+  assert.equal(rows.length, emitted);
+  for (const r of rows) {
+    const item = r.kind.replace(/^8k_/, "");
+    assert.ok(item in EIGHTK_ITEMS, `${r.kind} must be on the allowlist`);
+    assert.ok(!["7.01", "8.01", "9.01"].includes(item), "noise items are excluded");
+    assert.match(r.externalId, /^sig:8k:/);
+  }
+  // Historical filings arrive flagged backfilled — studies fuel, not scorecard fuel.
+  assert.ok(rows.every((r) => r.backfilled === 1), "fixture filings are all history");
+
+  const again = emitEightK("NVDA", filings);
+  assert.equal(again, 0, "re-scanning the same window emits nothing new");
+});
+
+check("one signal per (filing, item) — a multi-item 8-K yields one row per listed item", () => {
+  const twoItems = [{
+    accession: "acc-multi",
+    form: "8-K",
+    filedAt: "2026-06-01T12:00:00.000Z",
+    periodEnd: null,
+    description: null,
+    acceptedAt: "2026-06-01T13:00:00.000Z",
+    items: ["2.02", "5.02", "9.01"], // 9.01 rides along and must be dropped
+  }];
+  const emitted = emitEightK("TSTE", twoItems);
+  assert.equal(emitted, 2);
+});
+
 const checkAsync = async (label: string, fn: () => Promise<void>) => {
   try {
     await fn();

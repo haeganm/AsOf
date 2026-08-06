@@ -43,6 +43,7 @@ const ROUTES = [
   "/scorecard",
   "/signals",
   "/signals?source=monitor&symbol=NKE",
+  "/studies",
 ];
 
 async function main() {

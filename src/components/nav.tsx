@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 const ITEMS: Array<[string, string, string]> = [
   ["/", "Today", "What needs judgment"],
   ["/scorecard", "Scorecard", "What actually works"],
+  ["/studies", "Studies", "What usually happens next"],
   ["/signals", "Signals", "Everything collected"],
   ["/positions", "Positions", "Why you own each one"],
   ["/decisions", "Decisions", "What you did and why"],

@@ -16,6 +16,7 @@ import { syncFilings } from "../src/lib/ingest/filings";
 import { ensureUniverse, resolveCiks, listUniverse } from "../src/lib/ingest/universe";
 import { fetchFilings } from "../src/lib/ingest/filings";
 import { syncInsiders } from "../src/lib/ingest/insiders";
+import { emitEightK } from "../src/lib/ingest/eightk";
 import { startRun, finishRun } from "../src/lib/ingest/runs";
 import { symbolSeriesId, symbolsToTrack } from "../src/lib/correlation-report";
 import { evaluateMonitors } from "../src/lib/monitors";
@@ -142,8 +143,8 @@ async function main() {
     const tracked = listUniverse().filter((u) => u.cik);
     const noCik = listUniverse().length - tracked.length;
     if (noCik > 0) console.log(`insiders: ${noCik} universe symbols have no CIK yet (ETFs, or universe refresh pending)`);
-    const run = startRun("sec-insiders", `${tracked.length} companies`);
-    let seeded = 0, processed = 0, buys = 0, signals = 0, failed = 0;
+    const run = startRun("sec-universe", `${tracked.length} companies`);
+    let seeded = 0, processed = 0, buys = 0, signals = 0, eightk = 0, failed = 0;
     for (const u of tracked) {
       try {
         const filings = await fetchFilings(u.cik!);
@@ -152,13 +153,17 @@ async function main() {
         processed += r.processed;
         buys += r.buys;
         signals += r.signals;
+        // 8-K event signals ride the same submissions fetch. Historical ones
+        // arrive flagged backfilled — sample size for the studies, invisible
+        // to the live scorecard.
+        eightk += emitEightK(u.symbol, filings);
         if (r.signals > 0) console.log(`insiders: ${u.symbol.padEnd(6)} ${r.signals} signal(s) from ${r.buys} buy filing(s)`);
       } catch (err) {
         failed++;
         if (failed <= 3) console.log(`insiders: ${u.symbol.padEnd(6)} skipped — ${String(err).slice(0, 80)}`);
       }
     }
-    const note = `${processed} new Form 4s, ${buys} qualifying buys, ${signals} signals` +
+    const note = `${processed} new Form 4s, ${buys} qualifying buys, ${signals} insider signals, ${eightk} 8-K signals` +
       (seeded ? `, ${seeded} watermarks seeded` : "") + (failed ? `, ${failed} companies failed` : "");
     finishRun(run, failed < tracked.length, note);
     console.log(`insiders: ${note}`);

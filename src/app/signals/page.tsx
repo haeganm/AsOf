@@ -98,7 +98,9 @@ function SignalRow({ signal: s }: { signal: Signal }) {
       </span>
       <span className="w-[64px] shrink-0 font-medium">{s.symbol}</span>
       <span className="min-w-0 flex-1">
-        <span className="text-[13.5px]">{s.title}</span>
+        <Link href={`/signals/${s.id}`} className="text-[13.5px] hover:underline">
+          {s.title}
+        </Link>
         <span className="mt-0.5 block text-[11.5px] text-ink-4">
           {sourceLabel(s.source)} · {kindLabel(s.kind)} · knowable {relativeDays(s.knownAt)}
           {s.backfilled === 1 && " · imported history — off the live scorecard"}
