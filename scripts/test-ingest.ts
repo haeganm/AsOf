@@ -21,6 +21,15 @@ import {
   type SubmissionsResponse,
 } from "../src/lib/ingest/filings";
 import { buildReport, correlate, returnsByWeek, MIN_WEEKS } from "../src/lib/correlation";
+import { symbolSeriesId } from "../src/lib/correlation-report";
+import {
+  createMonitor,
+  deleteMonitor,
+  describeMonitor,
+  evaluateMonitors,
+  listMonitors,
+  read,
+} from "../src/lib/monitors";
 import { closeDb, openDb } from "../src/lib/db";
 
 const FIX = path.join(process.cwd(), "scripts", "fixtures");
@@ -51,6 +60,18 @@ db.prepare(
   `insert into positions (id,portfolioId,ticker,name,assetClass,status,openedAt,closedAt,createdAt,cik,demo)
    values ('pos_t','pf','NVDA','NVIDIA',null,'open',?,null,?, '0001045810',0)`
 ).run(new Date(Date.now() - 400 * 86_400_000).toISOString(), new Date(Date.now() - 400 * 86_400_000).toISOString());
+
+// A thesis with one assumption, so a monitor firing has something to link to.
+db.prepare(
+  `insert into thesis_versions
+   (id,positionId,versionNo,occurredAt,summary,marketView,variantView,assumptions,catalysts,risks,
+    falsifiers,horizon,addCondition,trimCondition,exitCondition,confidence,changeNote,createdAt)
+   values ('th_t','pos_t',1,?, 'Test thesis.',null,null,?, '[]','[]','[]',null,null,null,null,3,null,?)`
+).run(
+  new Date(Date.now() - 400 * 86_400_000).toISOString(),
+  JSON.stringify([{ id: "a1", text: "The margin assumption.", status: "intact" }]),
+  new Date().toISOString()
+);
 
 console.log("price parsing");
 
@@ -330,6 +351,180 @@ check("findings are withheld when the overlap is too short to mean anything", ()
   const report = buildReport(short, [["A", "B", "Some belief"]]);
   assert.deepEqual(report.findings, [], "no claim from ten weeks of data");
   assert.deepEqual(report.excluded.sort(), ["A", "B"], "and the gap is named rather than hidden");
+});
+
+console.log("\nmonitors");
+
+// Real recorded weekly closes, stored under the reserved per-symbol key so the
+// monitor engine reads them exactly as it would in the app.
+for (const sym of ["NKE", "^TNX"]) {
+  storeBars(
+    symbolSeriesId(sym),
+    parseChart(load<ChartResponse>(`chart-${sym.replace(/[^A-Za-z0-9]/g, "_")}-2y-1wk.json`))
+  );
+}
+
+check("a level monitor reads the latest close", () => {
+  const id = createMonitor({
+    positionId: "pos_t",
+    kind: "series_level",
+    symbol: "^TNX",
+    comparator: "above",
+    threshold: 999,
+    label: "Yield above an impossible level",
+  });
+  const m = listMonitors().find((x) => x.id === id)!;
+  const { value } = read(m);
+  assert.ok(value !== null, "there is cached history, so there must be a reading");
+  assert.ok(value! > 1 && value! < 20, `a 10-year yield should be single digits, got ${value}`);
+  deleteMonitor(id);
+});
+
+check("a drawdown monitor measures against the window high, and fires below it", () => {
+  const id = createMonitor({
+    positionId: "pos_t",
+    assumptionId: "a1",
+    kind: "drawdown",
+    symbol: "NKE",
+    comparator: "below",
+    threshold: -20,
+    windowDays: 180,
+    label: "20% below the six-month high",
+  });
+  const m = listMonitors().find((x) => x.id === id)!;
+  const { value, describe } = read(m);
+  assert.ok(value !== null && value! <= 0, "a drawdown is zero or negative");
+  assert.match(describe, /high of/);
+
+  const transitions = evaluateMonitors();
+  const mine = transitions.find((t) => t.monitor.id === id);
+  assert.ok(mine, "NKE is well below its six-month high, so this must fire");
+  assert.equal(mine!.direction, "fired");
+  assert.equal(listMonitors().find((x) => x.id === id)!.state, "fired");
+  deleteMonitor(id);
+});
+
+check("a firing writes ingested evidence against the assumption it speaks for", () => {
+  const id = createMonitor({
+    positionId: "pos_t",
+    assumptionId: "a1",
+    kind: "drawdown",
+    symbol: "NKE",
+    comparator: "below",
+    threshold: -5,
+    windowDays: 180,
+    label: "Test firing",
+    meaning: "This is what I said it would mean.",
+  });
+  evaluateMonitors();
+  const ev = db
+    .prepare("select * from evidence where externalId like ? order by occurredAt desc limit 1")
+    .get(`monitor:${id}:%`) as
+    | { origin: string; stance: string; contradictsAssumptionId: string | null; body: string }
+    | undefined;
+  assert.ok(ev, "a firing must leave a record");
+  assert.equal(ev!.origin, "ingested", "marked as found by the engine, not written by the user");
+  assert.equal(ev!.stance, "contradicts");
+  assert.equal(ev!.contradictsAssumptionId, "a1");
+  assert.match(ev!.body, /This is what I said it would mean/, "the interpretation travels with it");
+  deleteMonitor(id);
+});
+
+check("a monitor that stays fired does not write a second record", () => {
+  const id = createMonitor({
+    positionId: "pos_t",
+    kind: "drawdown",
+    symbol: "NKE",
+    comparator: "below",
+    threshold: -5,
+    windowDays: 180,
+    label: "Quiet while fired",
+  });
+  evaluateMonitors();
+  const countAfterFirst = (
+    db.prepare("select count(*) as n from evidence where externalId like ?").get(`monitor:${id}:%`) as {
+      n: number;
+    }
+  ).n;
+  evaluateMonitors();
+  evaluateMonitors();
+  const countAfterMore = (
+    db.prepare("select count(*) as n from evidence where externalId like ?").get(`monitor:${id}:%`) as {
+      n: number;
+    }
+  ).n;
+  assert.equal(countAfterFirst, 1);
+  assert.equal(countAfterMore, 1, "only transitions are recorded, not every check");
+  deleteMonitor(id);
+});
+
+check("a monitor with no cached history reads nothing rather than guessing", () => {
+  const id = createMonitor({
+    positionId: "pos_t",
+    kind: "price_level",
+    symbol: "NOSUCHSYMBOL",
+    comparator: "below",
+    threshold: 10,
+    label: "Unknown symbol",
+  });
+  const m = listMonitors().find((x) => x.id === id)!;
+  assert.equal(read(m).value, null);
+  // And it must not fire on a missing reading.
+  const before = listMonitors().find((x) => x.id === id)!.state;
+  evaluateMonitors();
+  assert.equal(listMonitors().find((x) => x.id === id)!.state, before);
+  deleteMonitor(id);
+});
+
+check("a deadline monitor counts days past the date", () => {
+  const past = createMonitor({
+    positionId: "pos_t",
+    kind: "deadline",
+    symbol: "NKE",
+    comparator: "above",
+    threshold: Date.now() - 10 * 86_400_000,
+    label: "A date ten days gone",
+  });
+  const future = createMonitor({
+    positionId: "pos_t",
+    kind: "deadline",
+    symbol: "NKE",
+    comparator: "above",
+    threshold: Date.now() + 10 * 86_400_000,
+    label: "A date ten days out",
+  });
+  const all = listMonitors();
+  assert.equal(read(all.find((m) => m.id === past)!).value, 10);
+  assert.equal(read(all.find((m) => m.id === future)!).value, -10);
+  assert.match(read(all.find((m) => m.id === past)!).describe, /passed 10 days ago/);
+  assert.match(read(all.find((m) => m.id === future)!).describe, /10 days remaining/);
+
+  const fired = evaluateMonitors().filter((t) => t.direction === "fired").map((t) => t.monitor.id);
+  assert.ok(fired.includes(past), "a date already gone should fire");
+  assert.ok(!fired.includes(future), "a date still ahead should not");
+  deleteMonitor(past);
+  deleteMonitor(future);
+});
+
+check("describeMonitor reads as a sentence for every kind", () => {
+  const base = { positionId: "pos_t", symbol: "NKE", comparator: "below" as const, label: "x" };
+  const cases: Array<[string, RegExp]> = [
+    ["price_level", /NKE below 70/],
+    ["drawdown", /falls 20% below its 90-day high/],
+    ["price_change", /falls more than 20% over 90 days/],
+    ["deadline", /passes/],
+  ];
+  for (const [kind, expected] of cases) {
+    const id = createMonitor({
+      ...base,
+      kind: kind as never,
+      threshold: kind === "deadline" ? Date.now() : kind === "price_level" ? 70 : -20,
+      windowDays: 90,
+    });
+    const m = listMonitors().find((x) => x.id === id)!;
+    assert.match(describeMonitor(m), expected, `${kind} reads badly: ${describeMonitor(m)}`);
+    deleteMonitor(id);
+  }
 });
 
 db.close();

@@ -8,6 +8,7 @@ import { ensurePortfolio, getDb, newId, nowIso } from "./db";
 import { syncPrices } from "./ingest/prices";
 import { getSecurity } from "./ingest/securities";
 import { getThesisAt } from "./queries";
+import { createMonitor, evaluateMonitors } from "./monitors";
 import type { Assumption, DecisionType } from "./types";
 import { DECISION_TYPES } from "./types";
 
@@ -615,6 +616,83 @@ async function createPostmortemImpl(fd: FormData) {
   redirect(`/postmortems/${id}`);
 }
 
+// ── monitors ──────────────────────────────────────────────────────────────
+
+async function addMonitorImpl(fd: FormData) {
+  const positionId = str(fd, "positionId", { required: true });
+  mustExist("positions", positionId);
+  const kind = pick(
+    fd,
+    "kind",
+    ["price_level", "price_change", "drawdown", "series_level", "series_change", "deadline"] as const,
+    "price_level"
+  );
+  const label = str(fd, "label", { required: true, max: 160 });
+  const assumptionId = str(fd, "assumptionId") || null;
+  if (assumptionId) {
+    const thesis = getThesisAt(positionId);
+    if (!thesis?.assumptions.some((a) => a.id === assumptionId)) {
+      throw new Error(`No assumption “${assumptionId}” in the current thesis.`);
+    }
+  }
+
+  let symbol = str(fd, "symbol", { max: 16 }).toUpperCase();
+  let threshold: number;
+  const comparator = pick(fd, "comparator", ["above", "below"] as const, "below");
+
+  if (kind === "deadline") {
+    const by = str(fd, "byDate", { required: true });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(by)) throw new Error("Give the date as yyyy-mm-dd.");
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(by)!;
+    threshold = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12, 0, 0, 0).getTime();
+    // A deadline needs no series; keep the position's own ticker for display.
+    if (!symbol) {
+      symbol = (
+        getDb().prepare("select ticker from positions where id=?").get(positionId) as {
+          ticker: string;
+        }
+      ).ticker;
+    }
+  } else {
+    if (!symbol) throw new Error("Which symbol should be watched?");
+    threshold = float(fd, "threshold", { required: true });
+    if (!Number.isFinite(threshold)) throw new Error("The threshold must be a number.");
+    // A drawdown is expressed as a negative percentage; accept either sign.
+    if (kind === "drawdown") threshold = -Math.abs(threshold);
+    const hasSeries = (
+      getDb()
+        .prepare("select count(*) as n from marks where positionId=?")
+        .get(`sym_${symbol.replace(/[^A-Z0-9]/g, "_")}`) as { n: number }
+    ).n;
+    if (hasSeries === 0) {
+      throw new Error(
+        `No price history cached for ${symbol}. Run \`npm run ingest\` first, or pick a symbol already in the book.`
+      );
+    }
+  }
+
+  createMonitor({
+    positionId,
+    assumptionId,
+    beliefId: str(fd, "beliefId") || null,
+    kind,
+    symbol,
+    comparator,
+    threshold,
+    windowDays: kind === "price_level" || kind === "series_level" || kind === "deadline"
+      ? null
+      : int(fd, "windowDays", 5, 730, 90),
+    label,
+    meaning: str(fd, "meaning") || null,
+  });
+
+  // Evaluate straight away: a condition already met should say so now, not after
+  // the next ingestion run.
+  evaluateMonitors();
+  refresh(`/positions/${positionId}`);
+  redirect(`/positions/${positionId}`);
+}
+
 // ── replay ────────────────────────────────────────────────────────────────
 
 async function saveReplayAttemptImpl(fd: FormData) {
@@ -695,4 +773,8 @@ export async function saveReplayAttempt(_prev: ActionState, fd: FormData): Promi
 
 export async function saveHindsightNote(_prev: ActionState, fd: FormData): Promise<ActionState> {
   return run(fd, () => saveHindsightNoteImpl(fd));
+}
+
+export async function addMonitor(_prev: ActionState, fd: FormData): Promise<ActionState> {
+  return run(fd, () => addMonitorImpl(fd));
 }

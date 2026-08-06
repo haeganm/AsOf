@@ -213,6 +213,43 @@ async function main() {
     has(body, "Today", "404 page should offer a way back");
   });
 
+  await step("a monitor that has fired says so, and lands on the timeline", async () => {
+    await page.goto(`${BASE}/positions/pos_nke`, { waitUntil: "networkidle" });
+    const body = await text(page);
+    has(body, "Watching", "position page");
+    has(body, "Condition met", "the fired monitor");
+    has(body, "Speaks for", "the assumption the monitor speaks for");
+    has(body, "Monitor · NKE", "the firing should appear on the timeline as evidence");
+  });
+
+  await step("a monitor can be created through the form", async () => {
+    await page.goto(`${BASE}/positions/pos_dlr/monitor`, { waitUntil: "networkidle" });
+    await page.fill('[name="label"]', "QA: yield above 4%");
+    await page.locator('input[name="kind"][value="series_level"]').check({ force: true });
+    await page.fill('[name="symbol"]', "^TNX");
+    await page.fill('[name="threshold"]', "4");
+    await page.locator('input[name="comparator"][value="above"]').check({ force: true });
+    await page.fill('[name="meaning"]', "QA: the rate leg stops being incidental.");
+    await Promise.all([
+      page.waitForURL(/\/positions\/pos_dlr$/, { timeout: 20_000 }),
+      page.click("[data-primary-submit]"),
+    ]);
+    const body = await text(page);
+    has(body, "QA: yield above 4%", "the new monitor");
+    // 10-year is above 4%, so it should already read as met.
+    has(body, "Condition met", "a condition already true should say so immediately");
+  });
+
+  await step("a monitor on an unknown symbol is refused with a reason", async () => {
+    await page.goto(`${BASE}/positions/pos_dlr/monitor`, { waitUntil: "networkidle" });
+    await page.fill('[name="label"]', "QA: nonsense symbol");
+    await page.fill('[name="symbol"]', "ZZZNOTREAL");
+    await page.fill('[name="threshold"]', "1");
+    await page.click("[data-primary-submit]");
+    await page.waitForSelector("[data-form-error]", { timeout: 20_000 });
+    has(await text(page), "No price history cached", "unknown-symbol error");
+  });
+
   await step("a passed catalyst is not offered as upcoming", async () => {
     await page.goto(`${BASE}/decisions/new`, { waitUntil: "networkidle" });
     const opts = await page.$$eval('select[name="linkedEventId"] option', (els) =>

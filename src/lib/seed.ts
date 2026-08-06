@@ -1798,6 +1798,82 @@ export function seedDatabase(db: DatabaseType.Database) {
     createdAt: d(235),
   });
 
+  // ── Monitors: written conditions bound to something observable ──────────
+  // Thresholds are chosen so the demo shows both states honestly — one already
+  // met, the rest still watching. They fire on the *real* symbol series, so what
+  // they report is true even though the book's own price path is fictional.
+  const monitors: Array<Record<string, unknown>> = [
+    {
+      id: "mon_nvda_margin",
+      positionId: "pos_nvda",
+      assumptionId: "a2",
+      kind: "drawdown",
+      symbol: "NVDA",
+      comparator: "below",
+      threshold: -25,
+      windowDays: 90,
+      label: "A 25% drawdown with the packaging constraint unchanged",
+      meaning:
+        "My add condition in thesis v1 was a 25%+ sentiment drawdown with packaging still sold out. I removed the add condition in v3, so if this fires I need to say which version I am acting on.",
+    },
+    {
+      id: "mon_dlr_rates",
+      positionId: "pos_dlr",
+      assumptionId: "a3",
+      beliefId: "bl_rates",
+      kind: "series_level",
+      symbol: "^TNX",
+      comparator: "above",
+      threshold: 5,
+      windowDays: null,
+      label: "10-year yield above 5%",
+      meaning:
+        "Assumption a3 is that cost of debt does not rise faster than releasing spreads improve. Above 5% I do not believe that survives, and the trim condition applies.",
+    },
+    {
+      id: "mon_fcx_copper",
+      positionId: "pos_fcx",
+      assumptionId: "a1",
+      beliefId: "bl_china",
+      kind: "series_level",
+      symbol: "HG=F",
+      comparator: "below",
+      threshold: 4,
+      windowDays: null,
+      label: "Copper below $4.00/lb",
+      meaning:
+        "My written add condition is copper below $4.00 while grid capex guidance is still rising. If this fires, check the guidance before acting on the price alone.",
+    },
+    {
+      id: "mon_nke_stop",
+      positionId: "pos_nke",
+      assumptionId: "a1",
+      kind: "drawdown",
+      symbol: "NKE",
+      comparator: "below",
+      threshold: -20,
+      windowDays: 180,
+      label: "A further 20% below the six-month high",
+      meaning:
+        "I have already cut to half weight two quarters late. This is the line at which I stop telling myself the wholesale mechanism will show up.",
+    },
+    {
+      id: "mon_ceg_docket",
+      positionId: "pos_ceg",
+      assumptionId: "a4",
+      beliefId: "bl_reg",
+      kind: "deadline",
+      symbol: "CEG",
+      comparator: "above",
+      threshold: base + 45 * DAY,
+      windowDays: null,
+      label: "First socialisation docket ruling due",
+      meaning:
+        "a4 is already broken and my exit condition names it. If the date passes with no ruling I am holding on hope rather than on the thesis.",
+    },
+  ];
+  for (const m of monitors) ins("monitors", { ...m, state: "clear", createdAt: d(30) });
+
   // ── One prior replay attempt, so the feature isn't empty on first visit ──
   ins("replay_attempts", {
     id: "rp_seed_1",

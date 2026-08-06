@@ -14,6 +14,7 @@ import { refreshUniverse, universeSize, needsRefresh } from "../src/lib/ingest/s
 import { fetchBars, storeBars, syncPrices } from "../src/lib/ingest/prices";
 import { syncFilings } from "../src/lib/ingest/filings";
 import { symbolSeriesId, symbolsToTrack } from "../src/lib/correlation-report";
+import { evaluateMonitors } from "../src/lib/monitors";
 
 const argv = process.argv.slice(2);
 const only = (flag: string) => argv.includes(flag);
@@ -107,6 +108,19 @@ async function main() {
       } catch (err) {
         console.log(`skipped — ${String(err).slice(0, 90)}`);
       }
+    }
+  }
+
+  // Monitors run last: they read the series that were just refreshed.
+  const transitions = evaluateMonitors();
+  if (transitions.length === 0) {
+    console.log("\nmonitors: no state changes");
+  } else {
+    console.log("");
+    for (const t of transitions) {
+      console.log(
+        `monitor ${t.direction === "fired" ? "FIRED " : "cleared"} ${t.monitor.label} — ${t.describe}`
+      );
     }
   }
 

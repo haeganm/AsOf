@@ -15,7 +15,9 @@ import {
   priceMoveSince,
 } from "@/lib/queries";
 import { money, pct, relativeDays, shortDate, signedPct } from "@/lib/format";
+import { listMonitors } from "@/lib/monitors";
 import { AttentionQueue } from "@/components/attention";
+import { MonitorList } from "@/components/monitors";
 import { Spark, TimelineFeed } from "@/components/timeline";
 import {
   AssumptionList,
@@ -45,6 +47,7 @@ export default async function PositionPage({ params }: { params: Promise<{ id: s
   const postmortem = getPostmortemForPosition(id);
   const marks = marksFor(id);
   const attention = getAttentionItems().filter((a) => a.positionId === id);
+  const monitors = listMonitors(id);
   const isHeld = p.shares > 0.0001;
   // For a pass there is no exit, so the reference point is when the idea was recorded.
   const referenceAt = p.status === "passed" ? p.createdAt : p.exitAt;
@@ -287,6 +290,13 @@ export default async function PositionPage({ params }: { params: Promise<{ id: s
               <p className="text-[13px] text-ink-3">No thesis recorded for this position.</p>
             </Section>
           )}
+
+          <Section
+            label="Watching"
+            title="Conditions bound to something observable, so they can fire on their own"
+          >
+            <MonitorList monitors={monitors} positionId={id} assumptionText={assumptionText} />
+          </Section>
 
           <Section
             label="Record"

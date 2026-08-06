@@ -177,6 +177,29 @@ create table if not exists ingest_runs (
   note text
 );
 
+-- Binds a written claim to something observable, so a falsifier can fire on its
+-- own instead of waiting to be noticed. A firing writes ordinary ingested
+-- evidence, which means every downstream feature — timeline, attention queue,
+-- thesis-update prompt — works on it unchanged.
+create table if not exists monitors (
+  id text primary key,
+  positionId text,
+  assumptionId text,
+  beliefId text,
+  kind text not null,
+  symbol text not null,
+  comparator text not null,
+  threshold real not null,
+  windowDays integer,
+  label text not null,
+  meaning text,
+  state text not null default 'clear',
+  lastValue real,
+  lastCheckedAt text,
+  firedAt text,
+  createdAt text not null
+);
+
 create table if not exists replay_attempts (
   id text primary key,
   decisionId text not null,
@@ -322,6 +345,9 @@ export function resetDb(db: Database.Database) {
     "event_beliefs",
     "postmortems",
     "replay_attempts",
+    // A monitor is the user's own condition, so it belongs to the book and goes
+    // with it. `securities` and `ingest_runs` are cached infrastructure and stay.
+    "monitors",
   ];
   for (const t of tables) db.exec(`delete from ${t}`);
 }

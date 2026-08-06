@@ -21,6 +21,8 @@ npm run dev          # http://localhost:3000 — seeds a demo book on first run
 
 **Beliefs reveal what the book is really betting on.** Positions link to underlying risk drivers, so a chip designer, a nuclear utility, a copper miner and a data-centre REIT show up as what they are — largely one bet expressed four ways. A sector chart cannot show you that.
 
+**Falsifiers can fire on their own.** A condition written as prose waits for you to notice it. Bind it to something observable — a price level, a drawdown from a window high, a move in the 10-year yield or copper, a date going by — and it watches itself. When one crosses, it writes an ordinary piece of evidence against the assumption it speaks for, carrying the sentence you wrote about what crossing would mean. That shape is deliberate: the timeline, the attention queue and the "not revisited since" logic all work on it without knowing monitors exist. Only a change of state is recorded, so a condition that stays met stays quiet.
+
 **And then the tape checks your work.** The belief matrix is your *model* of what connects your positions. Beside it, AsOf computes the realised weekly-return correlation between the same holdings and asks where the two disagree: a belief you declared that the prices never showed, two holdings moving together for a reason you never wrote down, or a stated macro exposure that is not visible at all. On the sample book it confirms the data-centre cluster and refutes one line of a thesis — DLR describes itself as "a levered short on long rates" while correlating about −0.05 with the 10-year yield over two years. Correlation is read from real prices for the symbol rather than from your own fills, because how two securities move together is a property of the market, not of your execution. Findings are withheld below 40 shared weeks rather than hedged.
 
 **Replay is the signature feature.** Pick a past decision. AsOf rebuilds the portfolio as it stood, hides everything that came afterwards — including what you actually chose and how it turned out — and asks you to decide again. Then it shows both answers side by side, what happened next, and a list of everything that arrived after the decision, so you can check whether your new answer quietly used it.
@@ -58,8 +60,9 @@ npm run seed -- --force     # rebuild the demo book from scratch
 npm run fixtures            # re-record the fixtures (the only thing needing network)
 npm run check:console       # loads all 30 routes, fails on any console error or warning
 npm run check:flow          # drives the whole decision loop in a real browser
-npm run ingest              # refresh the symbol universe, then top up prices
+npm run ingest              # symbol universe, prices, filings, then evaluate monitors
 npm run ingest -- --full    # 5-year price backfill rather than a top-up
+npm run check:qa            # regression checks for previously-reported defects
 ```
 
 Ingestion talks to two free, keyless sources: SEC for the ticker universe and filings, Yahoo for daily closes. Requests are serialised and rate-limited, every attempt is recorded in the `ingest_runs` table, and a network failure can never break a page render — the position simply keeps the price you entered.
