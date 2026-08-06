@@ -6,10 +6,10 @@ import {
   FormBlock,
   Prose,
   Row,
-  SubmitBar,
   TextField,
   todayValue,
 } from "@/components/forms";
+import { ActionForm } from "@/components/action-form";
 import { PageHeader } from "@/components/ui";
 
 export default async function AddEvidencePage({ params }: { params: Promise<{ id: string }> }) {
@@ -25,7 +25,12 @@ export default async function AddEvidencePage({ params }: { params: Promise<{ id
         lede="Facts and readings are kept apart on purpose. A fact is something a sceptic could check; a reading is your inference from it. Conflating the two is how a thesis becomes unfalsifiable."
       />
 
-      <form action={addEvidence} className="max-w-[760px]">
+      <ActionForm
+        action={addEvidence}
+        submitLabel="Add to the record"
+        cancelHref={`/positions/${id}`}
+        className="max-w-[760px]"
+      >
         <input type="hidden" name="positionId" value={id} />
 
         <FormBlock label="What kind of entry">
@@ -96,8 +101,7 @@ export default async function AddEvidencePage({ params }: { params: Promise<{ id
           </FormBlock>
         )}
 
-        <SubmitBar label="Add to the record" cancelHref={`/positions/${id}`} />
-      </form>
+      </ActionForm>
     </>
   );
 }

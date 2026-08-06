@@ -8,9 +8,9 @@ import {
   ListField,
   Prose,
   Row,
-  SubmitBar,
   TextField,
 } from "@/components/forms";
+import { ActionForm } from "@/components/action-form";
 import { Badge, PageHeader } from "@/components/ui";
 
 export default async function UpdateThesisPage({ params }: { params: Promise<{ id: string }> }) {
@@ -64,7 +64,12 @@ export default async function UpdateThesisPage({ params }: { params: Promise<{ i
         </section>
       )}
 
-      <form action={updateThesis} className="max-w-[860px]">
+      <ActionForm
+        action={updateThesis}
+        submitLabel={`Save as v${next}`}
+        cancelHref={`/positions/${id}`}
+        note={`v${current.versionNo} remains on the record unchanged.`}
+      >
         <input type="hidden" name="positionId" value={id} />
 
         <FormBlock
@@ -162,12 +167,7 @@ export default async function UpdateThesisPage({ params }: { params: Promise<{ i
           <ConfidencePicker defaultValue={current.confidence} />
         </FormBlock>
 
-        <SubmitBar
-          label={`Save as v${next}`}
-          cancelHref={`/positions/${id}`}
-          note={`v${current.versionNo} remains on the record unchanged.`}
-        />
-      </form>
+      </ActionForm>
     </>
   );
 }

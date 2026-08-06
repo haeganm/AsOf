@@ -1,7 +1,8 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { redirect } from "next/navigation";
+import { redirect, unstable_rethrow } from "next/navigation";
+import { echo, toMessage, type ActionState } from "./action-state";
 import { nextAssumptionIds } from "./assumptions";
 import { ensurePortfolio, getDb, newId, nowIso } from "./db";
 import { syncPrices } from "./ingest/prices";
@@ -64,18 +65,31 @@ function pick<T extends string>(fd: FormData, key: string, allowed: readonly T[]
 }
 
 /**
- * Dates are entered as `yyyy-mm-dd`. Parsed as midday UTC so the stored day
- * cannot shift under a timezone, and rejected rather than silently filed as
- * today — misdating a record is the one error this product cannot absorb.
+ * Dates are entered as `yyyy-mm-dd` and stored at *local* midday.
+ *
+ * Storing midday UTC put the instant on the wrong local calendar day for anyone
+ * far enough east or west, so a record entered as the 5th displayed as the 6th.
+ * Local midday keeps the rendered day equal to the day that was typed, with
+ * twelve hours of slack either side.
+ *
+ * Rejected rather than silently filed as today — misdating a record is the one
+ * error this product cannot absorb.
  */
 function dateOr(fd: FormData, key: string, fallback = nowIso()): string {
   const v = str(fd, key);
   if (!v) return fallback;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) throw new Error(`“${key}” must be a date (yyyy-mm-dd).`);
-  const d = new Date(`${v}T12:00:00.000Z`);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  if (!m) throw new Error(`“${key}” must be a date (yyyy-mm-dd).`);
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12, 0, 0, 0);
   if (Number.isNaN(d.getTime())) throw new Error(`“${key}” is not a real date.`);
-  // A record dated in the future would be counted in today's holdings and prices.
-  if (d.getTime() > Date.now() + DAY) throw new Error(`“${key}” cannot be in the future.`);
+  // Compared against the end of today, so "today" is never rejected as future.
+  const endOfToday = new Date();
+  endOfToday.setHours(23, 59, 59, 999);
+  if (d.getTime() > endOfToday.getTime()) {
+    throw new Error(
+      `That date is in the future. A record can only be dated today or earlier — use an event if you are planning ahead.`
+    );
+  }
   return d.toISOString();
 }
 
@@ -110,9 +124,28 @@ function refresh(...paths: string[]) {
   for (const p of paths) revalidatePath(p);
 }
 
+/**
+ * Runs an action body and turns a broken business rule into returned state
+ * rather than an unhandled server error.
+ *
+ * `unstable_rethrow` is essential: `redirect()` signals success by throwing a
+ * framework error, so swallowing everything would turn every successful save
+ * into a reported failure.
+ */
+async function run(fd: FormData, body: () => Promise<void>): Promise<ActionState> {
+  try {
+    await body();
+    return { error: null };
+  } catch (err) {
+    unstable_rethrow(err);
+    // The submission travels back so the form can restore what was typed.
+    return { error: toMessage(err), values: echo(fd) };
+  }
+}
+
 // ── positions & theses ────────────────────────────────────────────────────
 
-export async function createPosition(fd: FormData) {
+async function createPositionImpl(fd: FormData) {
   const db = getDb();
 
   // Everything is read and validated before a single row is written. Previously
@@ -153,6 +186,18 @@ export async function createPosition(fd: FormData) {
   // ticker, so a hand-edited query string cannot attach the wrong company.
   const security = getSecurity(ticker);
   const cik = security?.cik ?? null;
+
+  // One instrument, one position. Two rows for the same ticker double-count the
+  // book, give the belief matrix two indistinguishable columns, and make every
+  // position dropdown ambiguous.
+  const clash = db
+    .prepare("select id, status from positions where upper(ticker)=? limit 1")
+    .get(ticker) as { id: string; status: string } | undefined;
+  if (clash) {
+    throw new Error(
+      `${ticker} is already in the book. Record an add against the existing position rather than opening a second one.`
+    );
+  }
 
   db.transaction(() => {
     db.prepare(
@@ -244,7 +289,7 @@ export async function createPosition(fd: FormData) {
 }
 
 /** Never mutates the prior version — a new row is the only way to change a view. */
-export async function updateThesis(fd: FormData) {
+async function updateThesisImpl(fd: FormData) {
   const db = getDb();
   const positionId = str(fd, "positionId", { required: true });
   const current = getThesisAt(positionId);
@@ -307,7 +352,7 @@ export async function updateThesis(fd: FormData) {
 
 // ── decisions ─────────────────────────────────────────────────────────────
 
-export async function recordDecision(fd: FormData) {
+async function recordDecisionImpl(fd: FormData) {
   const db = getDb();
   const portfolio = ensurePortfolio(db);
   const positionId = str(fd, "positionId") || null;
@@ -390,7 +435,7 @@ export async function recordDecision(fd: FormData) {
 }
 
 /** Closes the loop on a past decision. This is what makes the pattern engine work. */
-export async function recordDecisionOutcome(fd: FormData) {
+async function recordDecisionOutcomeImpl(fd: FormData) {
   const id = str(fd, "decisionId", { required: true });
   mustExist("decisions", id);
   const note = str(fd, "outcomeNote", { required: true });
@@ -408,7 +453,7 @@ export async function recordDecisionOutcome(fd: FormData) {
 
 // ── evidence ──────────────────────────────────────────────────────────────
 
-export async function addEvidence(fd: FormData) {
+async function addEvidenceImpl(fd: FormData) {
   const positionId = str(fd, "positionId", { required: true });
   mustExist("positions", positionId);
   const contradicts = str(fd, "contradictsAssumptionId");
@@ -444,7 +489,7 @@ export async function addEvidence(fd: FormData) {
 
 // ── events ────────────────────────────────────────────────────────────────
 
-export async function createEvent(fd: FormData) {
+async function createEventImpl(fd: FormData) {
   const db = getDb();
   const portfolio = ensurePortfolio(db);
   const id = newId("ev");
@@ -510,7 +555,7 @@ export async function createEvent(fd: FormData) {
   redirect(`/events/${id}`);
 }
 
-export async function recordEventOutcome(fd: FormData) {
+async function recordEventOutcomeImpl(fd: FormData) {
   const id = str(fd, "eventId", { required: true });
   mustExist("events", id);
   const outcome = {
@@ -531,7 +576,7 @@ export async function recordEventOutcome(fd: FormData) {
 
 // ── postmortem ────────────────────────────────────────────────────────────
 
-export async function createPostmortem(fd: FormData) {
+async function createPostmortemImpl(fd: FormData) {
   const positionId = str(fd, "positionId", { required: true });
   mustExist("positions", positionId);
   const decisionId = str(fd, "decisionId") || null;
@@ -572,7 +617,7 @@ export async function createPostmortem(fd: FormData) {
 
 // ── replay ────────────────────────────────────────────────────────────────
 
-export async function saveReplayAttempt(fd: FormData) {
+async function saveReplayAttemptImpl(fd: FormData) {
   const decisionId = str(fd, "decisionId", { required: true });
   mustExist("decisions", decisionId);
   const id = newId("rp");
@@ -593,7 +638,7 @@ export async function saveReplayAttempt(fd: FormData) {
   redirect(`/replay/${decisionId}?reveal=${id}`);
 }
 
-export async function saveHindsightNote(fd: FormData) {
+async function saveHindsightNoteImpl(fd: FormData) {
   const attemptId = str(fd, "attemptId", { required: true });
   const decisionId = str(fd, "decisionId", { required: true });
   const note = str(fd, "hindsightNote", { required: true });
@@ -606,4 +651,48 @@ export async function saveHindsightNote(fd: FormData) {
   getDb().prepare("update replay_attempts set hindsightNote=? where id=?").run(note, attemptId);
   refresh(`/replay/${decisionId}`);
   redirect(`/replay/${decisionId}?reveal=${attemptId}`);
+}
+
+// ── exported actions ──────────────────────────────────────────────────────
+// Thin wrappers so a failed rule comes back as state the form can display,
+// instead of an unhandled error that discards everything the user wrote.
+
+export async function createPosition(_prev: ActionState, fd: FormData): Promise<ActionState> {
+  return run(fd, () => createPositionImpl(fd));
+}
+
+export async function updateThesis(_prev: ActionState, fd: FormData): Promise<ActionState> {
+  return run(fd, () => updateThesisImpl(fd));
+}
+
+export async function recordDecision(_prev: ActionState, fd: FormData): Promise<ActionState> {
+  return run(fd, () => recordDecisionImpl(fd));
+}
+
+export async function recordDecisionOutcome(_prev: ActionState, fd: FormData): Promise<ActionState> {
+  return run(fd, () => recordDecisionOutcomeImpl(fd));
+}
+
+export async function addEvidence(_prev: ActionState, fd: FormData): Promise<ActionState> {
+  return run(fd, () => addEvidenceImpl(fd));
+}
+
+export async function createEvent(_prev: ActionState, fd: FormData): Promise<ActionState> {
+  return run(fd, () => createEventImpl(fd));
+}
+
+export async function recordEventOutcome(_prev: ActionState, fd: FormData): Promise<ActionState> {
+  return run(fd, () => recordEventOutcomeImpl(fd));
+}
+
+export async function createPostmortem(_prev: ActionState, fd: FormData): Promise<ActionState> {
+  return run(fd, () => createPostmortemImpl(fd));
+}
+
+export async function saveReplayAttempt(_prev: ActionState, fd: FormData): Promise<ActionState> {
+  return run(fd, () => saveReplayAttemptImpl(fd));
+}
+
+export async function saveHindsightNote(_prev: ActionState, fd: FormData): Promise<ActionState> {
+  return run(fd, () => saveHindsightNoteImpl(fd));
 }

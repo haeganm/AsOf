@@ -54,25 +54,43 @@ export function CorrelationCheck({ check }: { check: CheckResult }) {
               <tr key={a}>
                 <td className="num py-2 pr-4 text-[12px]">{labelFor(a)}</td>
                 {keys.map((b) => {
+                  // The diagonal is a series against itself. Leaving it as a pale
+                  // swatch made it read, by this page's own legend, as "no link".
                   if (a === b) {
                     return (
-                      <td key={b} className="px-1 py-2 text-center">
-                        <span className="inline-block h-[15px] w-[15px] bg-wash-2" />
+                      <td
+                        key={b}
+                        className="num px-1 py-2 text-center text-[10.5px] text-ink-4"
+                        title={`${labelFor(a)} against itself`}
+                      >
+                        —
                       </td>
                     );
                   }
                   const c = cell(a, b);
+                  if (!c) {
+                    return (
+                      <td key={b} className="px-1 py-2 text-center text-[10.5px] text-ink-4">
+                        ·
+                      </td>
+                    );
+                  }
+                  const desc = `${labelFor(a)} vs ${labelFor(b)}: r = ${c.r.toFixed(2)} over ${c.n} weeks`;
                   return (
                     <td key={b} className="px-1 py-2 text-center">
-                      {c ? (
+                      {/* Colour carries the reading, but the number is always
+                          present for anyone who cannot use it. */}
+                      <span className="flex flex-col items-center gap-1" title={desc}>
                         <span
-                          title={`${labelFor(a)} vs ${labelFor(b)}: r = ${c.r.toFixed(2)} over ${c.n} weeks`}
-                          className="inline-block h-[15px] w-[15px]"
+                          aria-hidden
+                          className="inline-block h-[13px] w-[13px]"
                           style={shade(c.r)}
                         />
-                      ) : (
-                        <span className="inline-block h-[15px] w-[15px]" />
-                      )}
+                        <span className="num text-[10px] text-ink-2">
+                          <span className="sr-only">{desc}</span>
+                          <span aria-hidden>{c.r.toFixed(2)}</span>
+                        </span>
+                      </span>
                     </td>
                   );
                 })}

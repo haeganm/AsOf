@@ -7,10 +7,10 @@ import {
   ListField,
   Prose,
   Row,
-  SubmitBar,
   TextField,
   todayValue,
 } from "@/components/forms";
+import { ActionForm } from "@/components/action-form";
 import { PageHeader } from "@/components/ui";
 import { TickerPicker } from "@/components/ticker-picker";
 
@@ -36,7 +36,12 @@ export default async function NewPositionPage({
         <TickerPicker q={sp.q ?? ""} selected={sp.ticker ?? null} basePath="/positions/new" />
       </div>
 
-      <form action={createPosition} className="max-w-[860px]">
+      <ActionForm
+        action={createPosition}
+        submitLabel="Create position"
+        cancelHref="/positions"
+        note="This writes thesis v1 and an opening decision. Neither can be edited later — you update by adding a new version."
+      >
         <FormBlock label="The bet" title="One sentence you would defend to a sceptical colleague.">
           <Prose
             label="Why this should work"
@@ -162,12 +167,7 @@ export default async function NewPositionPage({
           </FormBlock>
         )}
 
-        <SubmitBar
-          label="Create position"
-          cancelHref="/positions"
-          note="This writes thesis v1 and an opening decision. Neither can be edited later — you update by adding a new version."
-        />
-      </form>
+      </ActionForm>
     </>
   );
 }

@@ -6,10 +6,10 @@ import {
   ListField,
   Prose,
   Row,
-  SubmitBar,
   TextField,
   todayValue,
 } from "@/components/forms";
+import { ActionForm } from "@/components/action-form";
 import { PageHeader } from "@/components/ui";
 
 const SCENARIOS = [
@@ -35,7 +35,12 @@ export default function NewEventPage() {
         lede="The point of this page is that it is written in advance. Afterwards, AsOf will hold your expectation next to what happened and ask whether you did what you said you would."
       />
 
-      <form action={createEvent} className="max-w-[860px]">
+      <ActionForm
+        action={createEvent}
+        submitLabel="Save the plan"
+        cancelHref="/events"
+        note="Frozen once saved. You record the outcome after the date passes."
+      >
         <FormBlock label="The catalyst">
           <TextField
             label="What is happening"
@@ -148,12 +153,7 @@ export default function NewEventPage() {
           </FormBlock>
         )}
 
-        <SubmitBar
-          label="Save the plan"
-          cancelHref="/events"
-          note="Frozen once saved. You record the outcome after the date passes."
-        />
-      </form>
+      </ActionForm>
     </>
   );
 }

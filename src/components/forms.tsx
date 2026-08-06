@@ -255,6 +255,16 @@ export function SubmitBar({
   );
 }
 
+/**
+ * Today in the *viewer's* timezone.
+ *
+ * `toISOString().slice(0,10)` is UTC, so anyone west of Greenwich gets tomorrow
+ * for part of every day — at 17:00 PDT the date pickers all defaulted to the
+ * following day, and a decision recorded "today" then rendered as "yesterday".
+ */
 export function todayValue() {
-  return new Date().toISOString().slice(0, 10);
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate()
+  ).padStart(2, "0")}`;
 }

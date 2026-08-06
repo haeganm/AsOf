@@ -12,6 +12,7 @@ import {
 import { DECISION_LABEL } from "@/lib/types";
 import { money, relativeDays, shortDate, signedPct } from "@/lib/format";
 import { ChipRadio, Prose } from "@/components/forms";
+import { ActionForm } from "@/components/action-form";
 import { Badge, ConfidenceMeter, Field, PageHeader, Section, VerdictMark } from "@/components/ui";
 
 export default async function DecisionPage({ params }: { params: Promise<{ id: string }> }) {
@@ -108,7 +109,12 @@ export default async function DecisionPage({ params }: { params: Promise<{ id: s
                 <p className="writing">{d.outcomeNote}</p>
               </>
             ) : (
-              <form action={recordDecisionOutcome} className="max-w-[640px]">
+              <ActionForm
+                action={recordDecisionOutcome}
+                submitLabel="Record the outcome"
+                cancelHref={`/decisions/${id}`}
+                className="max-w-[640px]"
+              >
                 <input type="hidden" name="decisionId" value={id} />
                 <p className="writing mb-6 text-[14px]">
                   Judging the decision is not the same as reading the price. A decision can be good
@@ -133,11 +139,8 @@ export default async function DecisionPage({ params }: { params: Promise<{ id: s
                     rows={5}
                     placeholder="Be specific about whether the reasoning held, separately from whether the price cooperated."
                   />
-                  <button type="submit" data-primary-submit className="btn btn-solid">
-                    Record the outcome
-                  </button>
                 </div>
-              </form>
+              </ActionForm>
             )}
           </Section>
 

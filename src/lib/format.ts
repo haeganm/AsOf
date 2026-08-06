@@ -52,14 +52,26 @@ export function daysUntil(iso: string) {
   return Math.round((new Date(iso).getTime() - Date.now()) / DAY);
 }
 
+const startOfLocalDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+
+/**
+ * Whole days between two instants, counted as local calendar days.
+ *
+ * Not a millisecond difference: a record stamped midday today compared against
+ * 23:00 tonight is 11 hours apart, which rounds to one day and reads as
+ * "yesterday". Calendar days are what a dated record actually means.
+ */
+export function calendarDaysBetween(iso: string, ref: string = new Date().toISOString()) {
+  return Math.round((startOfLocalDay(new Date(ref)) - startOfLocalDay(new Date(iso))) / DAY);
+}
+
 /** "14 days ago" / "in 12 days" — relative to now, or to a supplied reference. */
 export function relativeDays(iso: string, ref: string = new Date().toISOString()) {
-  const ms = new Date(ref).getTime() - new Date(iso).getTime();
-  const days = Math.round(ms / DAY);
+  const days = calendarDaysBetween(iso, ref);
   if (days === 0) return "today";
   if (days === 1) return "yesterday";
   if (days === -1) return "tomorrow";
-  const span = describeSpan(Math.abs(ms));
+  const span = describeSpan(Math.abs(days) * DAY);
   return days > 0 ? `${span} ago` : `in ${span}`;
 }
 

@@ -211,6 +211,19 @@
     color: var(--color-paper);
   }
 
+  /* Visually hidden but read aloud — for values a sighted reader gets from colour. */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+  }
+
   /* Sealed = the Replay mode where the future is hidden. Inverted, unmistakable. */
   .sealed {
     background: var(--color-ink);

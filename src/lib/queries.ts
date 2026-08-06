@@ -1,6 +1,7 @@
 import { getDb } from "./db";
-import { describeSpan } from "./format";
+import { calendarDaysBetween, describeSpan } from "./format";
 import type {
+  Assumption,
   AttentionItem,
   Belief,
   BeliefExposure,
@@ -242,9 +243,20 @@ export function lastActivityAt(positionId: string, asOf?: string): string | null
  * than the stored one, so rewinding un-closes a position everywhere at once and
  * a "watching" idea stops reporting itself as closed.
  */
-function snapshot(p: Position, asOf: string | undefined, totalValue: number): PositionSnapshot {
+/**
+ * @param priceAsOf  optional separate bound for the *price* only. Replay sizes a
+ *   position at the instant before a decision but must price it at the instant
+ *   of the decision — otherwise the header reads "400 sh · $32,640" beside
+ *   "Mark that day $91.50", and 400 × 91.50 is not $32,640.
+ */
+function snapshot(
+  p: Position,
+  asOf: string | undefined,
+  totalValue: number,
+  priceAsOf?: string
+): PositionSnapshot {
   const led = positionLedger(p.id, asOf);
-  const price = priceAt(p.id, asOf);
+  const price = priceAt(p.id, priceAsOf ?? asOf);
   const value = price !== null ? led.shares * price : 0;
   const held = led.shares > EPS;
   const b = bound(asOf);
@@ -281,28 +293,32 @@ function snapshot(p: Position, asOf: string | undefined, totalValue: number): Po
   };
 }
 
-export function listPositions(asOf?: string): PositionSnapshot[] {
+export function listPositions(asOf?: string, priceAsOf?: string): PositionSnapshot[] {
   const rows = getDb()
     .prepare("select * from positions where createdAt<=? order by ticker")
     .all(bound(asOf)) as Position[];
 
   // Snapshot once with a zero total, then fill weights in — the previous version
   // recomputed shares three times and the price twice for every held position.
-  const first = rows.map((p) => snapshot(p, asOf, 0));
+  const first = rows.map((p) => snapshot(p, asOf, 0, priceAsOf));
   const total = first.reduce((s, x) => s + x.value, 0);
   for (const p of first) p.weightPct = total > 0 ? (p.value / total) * 100 : 0;
 
   return first.sort((a, b) => b.value - a.value || a.ticker.localeCompare(b.ticker));
 }
 
-export function getPositionSnapshot(id: string, asOf?: string): PositionSnapshot | null {
+export function getPositionSnapshot(
+  id: string,
+  asOf?: string,
+  priceAsOf?: string
+): PositionSnapshot | null {
   // No createdAt bound here on purpose. Replaying the decision to *open* a
   // position has to be able to name the instrument, even though at that instant
   // the size and holdings are still empty — and those are bounded.
   const p = getDb().prepare("select * from positions where id=?").get(id) as Position | undefined;
   if (!p) return null;
-  const total = listPositions(asOf).reduce((s, x) => s + x.value, 0);
-  return snapshot(p, asOf, total);
+  const total = listPositions(asOf, priceAsOf).reduce((s, x) => s + x.value, 0);
+  return snapshot(p, asOf, total, priceAsOf);
 }
 
 // ── evidence, decisions, events ───────────────────────────────────────────
@@ -588,6 +604,36 @@ export function getAttentionItems(asOf?: string): AttentionItem[] {
         href: `/positions/${p.id}`,
         question: "Does the thesis still say what you believe, or is it just the last version you wrote?",
       });
+    }
+
+    // 1b. A written exit or trim condition that names a broken assumption, where
+    // that assumption is now broken. This is the loudest signal the product can
+    // produce: not "something changed" but "the rule you wrote has fired".
+    const broken = thesis.assumptions.filter((a) => a.status === "broken");
+    if (isHeld && broken.length > 0) {
+      const rules: Array<[string, string | null]> = [
+        ["exit", thesis.exitCondition],
+        ["trim", thesis.trimCondition],
+      ];
+      for (const [kind, condition] of rules) {
+        if (!condition) continue;
+        const named = broken.filter((a) => mentionsAssumption(condition, a));
+        if (named.length === 0) continue;
+        items.push({
+          id: `att_rule_${kind}_${p.id}`,
+          severity: "high",
+          kind: `Written ${kind} condition has fired`,
+          positionId: p.id,
+          headline: `${p.ticker}: your own ${kind} condition is satisfied — ${named.length === 1 ? "the assumption it names is" : "the assumptions it names are"} now broken`,
+          detail: `You wrote: “${condition}”. ${named.map((a) => `“${a.text}”`).join(" and ")} ${named.length === 1 ? "is" : "are"} marked broken, and you are still holding ${fmtPct(p.weightPct)} of the book.`,
+          href: `/positions/${p.id}`,
+          question:
+            kind === "exit"
+              ? "You wrote this rule while you had no position to defend. Are you acting on it, or renegotiating with it?"
+              : "The rule says trim. Is there a reason today that would have counted when you wrote it?",
+        });
+        break; // Exit outranks trim; do not report both.
+      }
     }
 
     // 2. Structural weakening: most of the thesis is no longer intact.
@@ -905,8 +951,11 @@ export function getReplayContext(decisionId: string): ReplayContext | null {
   const own = justBefore(decision.occurredAt);
   const thesisBound = decision.type === "thesis_change" ? own : market;
 
-  const position = decision.positionId ? getPositionSnapshot(decision.positionId, own) : null;
-  const positionsThen = listPositions(own).filter(
+  // Sized at `own`, priced at `market` — see the note on `snapshot`.
+  const position = decision.positionId
+    ? getPositionSnapshot(decision.positionId, own, market)
+    : null;
+  const positionsThen = listPositions(own, market).filter(
     (p) => p.shares > EPS || p.id === decision.positionId
   );
 
@@ -948,7 +997,29 @@ export function daysBetween(a: string, b: string) {
 
 /** "16 days" / "1 month" / "1.4 years" — never "1 days". */
 function span(a: string, b: string) {
-  return describeSpan(Math.abs(new Date(b).getTime() - new Date(a).getTime()));
+  return describeSpan(Math.abs(calendarDaysBetween(a, b)) * DAY);
+}
+
+/**
+ * Does a written rule refer to this assumption?
+ *
+ * Matches either the assumption's id (theses routinely say "a4 moving to
+ * broken") or a distinctive run of words from its text. Deliberately
+ * conservative — a missed match costs a nudge, a false match cries wolf about
+ * the user's own rule, which is worse.
+ */
+function mentionsAssumption(condition: string, a: Assumption): boolean {
+  const text = condition.toLowerCase();
+  // Word-boundary match on the id so "a4" does not match inside "a400".
+  if (new RegExp(`\\b${a.id.toLowerCase()}\\b`).test(text)) return true;
+  const words: string[] = a.text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((w: string) => w.length > 4);
+  if (words.length < 2) return false;
+  const hits = words.filter((w) => text.includes(w)).length;
+  return hits >= Math.max(2, Math.ceil(words.length * 0.5));
 }
 
 function fmtPct(n: number) {

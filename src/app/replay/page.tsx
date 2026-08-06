@@ -56,7 +56,10 @@ export default function ReplayIndex() {
     .sort((a, b) => b.score - a.score || b.d.occurredAt.localeCompare(a.d.occurredAt));
 
   const prime = setups.slice(0, 3);
-  const rest = setups.slice(3);
+  // The remainder is a browsable list, so date order beats context score.
+  const rest = setups
+    .slice(3)
+    .sort((a, b) => b.d.occurredAt.localeCompare(a.d.occurredAt));
 
   return (
     <>
@@ -158,7 +161,10 @@ export default function ReplayIndex() {
       </Section>
 
       {rest.length > 0 && (
-        <Section label="Every other moment on record" title={`${rest.length} decisions`}>
+        <Section
+          label="Every other moment on record"
+          title={`${rest.length} decisions, most recent first`}
+        >
           <ul className="divide-y divide-rule border-y border-rule">
             {rest.map((s) => (
               <li key={s.d.id}>

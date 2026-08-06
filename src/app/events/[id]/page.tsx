@@ -11,6 +11,7 @@ import {
 } from "@/lib/queries";
 import { pct, relativeDays, shortDate } from "@/lib/format";
 import { Prose, VerdictPicker } from "@/components/forms";
+import { ActionForm } from "@/components/action-form";
 import { Badge, Bar, ButtonLink, Field, PageHeader, Section, VerdictMark } from "@/components/ui";
 
 export default async function EventPage({ params }: { params: Promise<{ id: string }> }) {
@@ -246,7 +247,12 @@ export default async function EventPage({ params }: { params: Promise<{ id: stri
           title={past ? "This event has already happened" : "Available once the event has happened"}
         >
           {past ? (
-            <form action={recordEventOutcome} className="max-w-[720px]">
+            <ActionForm
+              action={recordEventOutcome}
+              submitLabel="Record the outcome"
+              cancelHref={`/events/${id}`}
+              className="max-w-[720px]"
+            >
               <input type="hidden" name="eventId" value={id} />
               <div className="space-y-7">
                 <Prose
@@ -289,11 +295,8 @@ export default async function EventPage({ params }: { params: Promise<{ id: stri
                   rows={4}
                   hint="The observation you would want to be handed the next time an event like this comes round."
                 />
-                <button type="submit" data-primary-submit className="btn btn-solid">
-                  Record the outcome
-                </button>
               </div>
-            </form>
+            </ActionForm>
           ) : (
             <p className="writing text-[13.5px]">
               Come back after {shortDate(ev.occurredAt)}. Until then the plan above is deliberately

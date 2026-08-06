@@ -302,16 +302,28 @@ async function main() {
   });
 
   await step("a real security is created with real price history", async () => {
-    await visit(page, "/positions/new?q=freeport");
-    await page.click('a[href*="ticker=FCX"]');
-    await page.fill('[name="summary"]', "Smoke test: grid copper demand is price-insensitive.");
+    // Deliberately not a ticker the demo book already holds — the duplicate
+    // guard would (correctly) refuse that.
+    await visit(page, "/positions/new?q=vertiv");
+    await page.click('a[href*="ticker=VRT"]');
+    await page.fill('[name="summary"]', "Smoke test: thermal management is the gating constraint.");
     await page.fill('[name="shares"]', "10");
     await page.fill('[name="price"]', "50");
-    await page.fill('[name="assumptions_new"]', "No new supply reaches market before 2028.");
+    await page.fill('[name="assumptions_new"]', "Liquid cooling attach rates keep rising.");
     await Promise.all([page.waitForURL(/\/positions\/pos_/), page.click("[data-primary-submit]")]);
     const b = await page.innerText("body");
-    has(b, "FCX", "real position");
+    has(b, "VRT", "real position");
     has(b, "Price path", "a backfill should give it a price path");
+  });
+
+  await step("the duplicate-instrument guard refuses a ticker already held", async () => {
+    await visit(page, "/positions/new");
+    await page.fill('[name="ticker"]', "NVDA");
+    await page.fill('[name="name"]', "NVIDIA Corporation");
+    await page.fill('[name="summary"]', "Smoke test: should be refused.");
+    await page.click("[data-primary-submit]");
+    await page.waitForSelector("[data-form-error]", { timeout: 20_000 });
+    has(await page.innerText("body"), "already in the book", "duplicate guard");
   });
 
   await browser.close();

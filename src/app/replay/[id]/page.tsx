@@ -1,10 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { saveHindsightNote, saveReplayAttempt } from "@/lib/actions";
-import { getReplayContext, listEvidence, marksFor } from "@/lib/queries";
+import { getReplayContext, listEvidence, listThesisVersions } from "@/lib/queries";
 import { DECISION_LABEL, DECISION_TYPES } from "@/lib/types";
 import { money, pct, relativeDays, shortDate, signedPct } from "@/lib/format";
 import { ChipRadio, ConfidencePicker, Prose } from "@/components/forms";
+import { ActionForm } from "@/components/action-form";
 import { DecisionBlock, EvidenceBlock, Spark, TimelineFeed } from "@/components/timeline";
 import {
   AssumptionList,
@@ -35,6 +36,17 @@ export default async function ReplayRoom({
   // query string does not open the box.
   const attempt = reveal ? ctx.attempts.find((a) => a.id === reveal) : undefined;
   const sealedDate = shortDate(decision.occurredAt);
+
+  // Assumption ids are internal; every surface that shows a contradiction should
+  // show the claim it argues with, not "a5".
+  const allVersions = decision.positionId ? listThesisVersions(decision.positionId) : [];
+  const assumptionText = (aid: string) => {
+    for (const v of allVersions) {
+      const hit = v.assumptions.find((a) => a.id === aid);
+      if (hit) return hit.text;
+    }
+    return null;
+  };
 
   if (!attempt) {
     const heldThen = ctx.positionsThen.filter((p) => p.shares > 0.0001);
@@ -148,6 +160,8 @@ export default async function ReplayRoom({
                             <p className="writing text-[13px]">{ev.iExpect ?? "—"}</p>
                           </div>
                         </div>
+                        {/* The seeded title of one catalyst names the decision
+                            being replayed, which gives the answer away. */}
                         {ev.keyVariables.length > 0 && (
                           <div className="mt-4 border-t border-rule pt-3">
                             <div className="label mb-2">Variables you named</div>
@@ -269,7 +283,12 @@ export default async function ReplayRoom({
             after the fact — the gap between them is the only thing this exercise can measure.
           </p>
 
-          <form action={saveReplayAttempt} className="max-w-[760px] space-y-8">
+          <ActionForm
+            action={saveReplayAttempt}
+            submitLabel="Commit and reveal"
+            cancelHref="/replay"
+            className="max-w-[760px] space-y-8"
+          >
             <input type="hidden" name="decisionId" value={id} />
             <ChipRadio
               label="Action"
@@ -292,15 +311,7 @@ export default async function ReplayRoom({
               name="newConfidence"
               hint="Your conviction now, on this information only."
             />
-            <div className="flex flex-wrap items-center gap-4 border-t border-rule pt-6">
-              <button type="submit" data-primary-submit className="btn btn-solid">
-                Commit and reveal
-              </button>
-              <Link href="/replay" className="btn btn-quiet">
-                Leave without deciding
-              </Link>
-            </div>
-          </form>
+          </ActionForm>
         </section>
       </>
     );
@@ -341,7 +352,10 @@ export default async function ReplayRoom({
         <div className="grid gap-6 lg:grid-cols-2">
           <div>
             <div className="label mb-3 border-b border-rule pb-2">What you decided then</div>
-            <DecisionBlock d={{ ...decision, outcomeNote: null, outcomeVerdict: null, outcomeAt: null }} />
+            <DecisionBlock
+              d={{ ...decision, outcomeNote: null, outcomeVerdict: null, outcomeAt: null }}
+              hideOutcome
+            />
           </div>
           <div>
             <div className="label label-ink mb-3 border-b border-ink pb-2">What you decided now</div>
@@ -471,6 +485,7 @@ export default async function ReplayRoom({
           <div className="label label-ink mb-4">Everything on the record since</div>
           <TimelineFeed
             entries={ctx.timelineAfter}
+            assumptionText={assumptionText}
             emptyNote="Nothing was recorded on this position after that day."
           />
         </div>
@@ -489,7 +504,12 @@ export default async function ReplayRoom({
         {attempt.hindsightNote ? (
           <p className="writing-lg">{attempt.hindsightNote}</p>
         ) : (
-          <form action={saveHindsightNote} className="max-w-[720px]">
+          <ActionForm
+            action={saveHindsightNote}
+            submitLabel="Save and close the replay"
+            cancelHref={`/replay/${id}?reveal=${attempt.id}`}
+            className="max-w-[720px]"
+          >
             <input type="hidden" name="attemptId" value={attempt.id} />
             <input type="hidden" name="decisionId" value={id} />
             <Prose
@@ -499,10 +519,7 @@ export default async function ReplayRoom({
               rows={5}
               hint="The useful version of this answer names the specific thing you knew that you could not have known. “Hard to separate” is a legitimate answer if you say why."
             />
-            <button type="submit" data-primary-submit className="btn btn-solid mt-6">
-              Save and close the replay
-            </button>
-          </form>
+          </ActionForm>
         )}
       </Section>
 

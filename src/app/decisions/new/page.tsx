@@ -8,10 +8,10 @@ import {
   FormBlock,
   Prose,
   Row,
-  SubmitBar,
   TextField,
   todayValue,
 } from "@/components/forms";
+import { ActionForm } from "@/components/action-form";
 import { PageHeader } from "@/components/ui";
 
 export default async function NewDecisionPage({
@@ -21,7 +21,11 @@ export default async function NewDecisionPage({
 }) {
   const sp = await searchParams;
   const positions = listPositions();
-  const upcoming = listEvents({ status: "upcoming" });
+  // "Upcoming" must mean it has not happened yet. A catalyst whose date has
+  // passed but whose outcome is unrecorded is still status 'upcoming' in the
+  // data, and offering it here reads as a bug.
+  const now = new Date().toISOString();
+  const upcoming = listEvents({ status: "upcoming" }).filter((e) => e.occurredAt > now);
 
   return (
     <>
@@ -31,7 +35,12 @@ export default async function NewDecisionPage({
         lede="This should take a minute. The value is not in the detail — it is in having written the expectation and the reversal trigger down before you know how it turns out."
       />
 
-      <form action={recordDecision} className="max-w-[820px]">
+      <ActionForm
+        action={recordDecision}
+        submitLabel="Record decision"
+        cancelHref="/decisions"
+        className="max-w-[820px]"
+      >
         <FormBlock label="What you decided">
           <ChipRadio
             label="Action"
@@ -122,8 +131,7 @@ export default async function NewDecisionPage({
           </p>
         </FormBlock>
 
-        <SubmitBar label="Record decision" cancelHref="/decisions" />
-      </form>
+      </ActionForm>
     </>
   );
 }

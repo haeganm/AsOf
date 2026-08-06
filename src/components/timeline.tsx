@@ -82,10 +82,15 @@ export function DecisionBlock({
   d,
   href,
   compact = false,
+  hideOutcome = false,
+  assumptionText,
 }: {
   d: Decision;
   href?: string;
   compact?: boolean;
+  /** Replay blanks the outcome deliberately; do not then label it "not recorded". */
+  hideOutcome?: boolean;
+  assumptionText?: (id: string) => string | null;
 }) {
   return (
     <div className="border border-ink">
@@ -132,6 +137,8 @@ export function DecisionBlock({
           <ConfidenceMeter value={d.confidence} label="Confidence at the time" />
           {d.outcomeVerdict ? (
             <VerdictMark value={d.outcomeVerdict} />
+          ) : hideOutcome ? (
+            <Badge variant="quiet">Outcome held back</Badge>
           ) : (
             <Badge variant="quiet">Outcome not recorded</Badge>
           )}

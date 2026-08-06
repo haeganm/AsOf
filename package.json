@@ -15,6 +15,7 @@
     "fixtures": "tsx scripts/record-fixtures.ts",
     "check:console": "tsx scripts/console-check.ts",
     "check:flow": "tsx scripts/smoke.ts",
+    "check:qa": "tsx scripts/qa-recheck.ts",
     "ingest": "tsx scripts/ingest.ts"
   },
   "dependencies": {

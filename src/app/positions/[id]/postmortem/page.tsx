@@ -2,7 +2,8 @@ import { notFound } from "next/navigation";
 import { createPostmortem } from "@/lib/actions";
 import { getPositionSnapshot, listDecisions, listThesisVersions } from "@/lib/queries";
 import { shortDate, signedPct } from "@/lib/format";
-import { ChipRadio, FormBlock, Prose, SubmitBar, VerdictPicker } from "@/components/forms";
+import { ChipRadio, FormBlock, Prose, VerdictPicker } from "@/components/forms";
+import { ActionForm } from "@/components/action-form";
 import { PageHeader } from "@/components/ui";
 
 const ROWS = [
@@ -77,7 +78,12 @@ export default async function NewPostmortemPage({ params }: { params: Promise<{ 
         )}
       </section>
 
-      <form action={createPostmortem} className="max-w-[820px]">
+      <ActionForm
+        action={createPostmortem}
+        submitLabel="Save postmortem"
+        cancelHref={`/positions/${id}`}
+        className="max-w-[820px]"
+      >
         <input type="hidden" name="positionId" value={id} />
 
         {decisions.length > 0 && (
@@ -142,8 +148,7 @@ export default async function NewPostmortemPage({ params }: { params: Promise<{ 
           />
         </FormBlock>
 
-        <SubmitBar label="Save postmortem" cancelHref={`/positions/${id}`} />
-      </form>
+      </ActionForm>
     </>
   );
 }

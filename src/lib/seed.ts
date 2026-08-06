@@ -476,6 +476,47 @@ export function seedDatabase(db: DatabaseType.Database) {
     },
 
     {
+      id: "th_ceg_3",
+      positionId: "pos_ceg",
+      versionNo: 3,
+      occurredAt: d(35),
+      summary:
+        "Scarce firm power as a levered option on data-center load growth — with the political leg now broken rather than merely weakening.",
+      marketView:
+        "The market is treating the socialisation filings as noise and continuing to price the auction result as repeatable.",
+      variantView:
+        "I no longer think a4 survives. A second state has taken up the consumer-advocate filing and the language has moved from allocation to recovery of costs already incurred. My exit condition names exactly this, and I am recording that it has fired before I decide what to do — writing it down first is the only way I get to find out whether I follow my own rules.",
+      assumptions: J([
+        { id: "a1", text: "Large-load interconnection requests keep growing faster than firm generation can be added.", status: "intact" },
+        { id: "a2", text: "Regulators and the grid operator allow load-growth economics to reach the generator.", status: "intact" },
+        { id: "a3", text: "Nuclear PTC floor limits the downside on power prices.", status: "intact" },
+        { id: "a4", text: "No forced socialisation of large-load costs onto generators.", status: "broken" },
+        { id: "a5", text: "Political tolerance for higher retail bills survives one election cycle.", status: "weakening" },
+      ]),
+      catalysts: J([
+        "Rulings in the two open state dockets",
+        "Next capacity auction",
+        "Any legislative text that names generators explicitly",
+      ]),
+      risks: J([
+        "The thesis now depends on a4 being reversed on appeal, which is a legal call I cannot make",
+        "A re-rating downward as the market catches up to the filings",
+        "I am holding a fifth of the book against a broken assumption",
+      ]),
+      falsifiers: J([
+        "An auction clearing materially lower despite rising load",
+        "A regulator clawing back large-load pricing",
+        "Legislation socialising large-load costs onto generators",
+      ]),
+      horizon: "Reduced to: until the first docket rules",
+      addCondition: "None. Adding against a broken assumption is how a thesis becomes a position.",
+      trimCondition: "N/A — the exit condition below is the live one.",
+      exitCondition: "A clawback ruling, or a4 moving to broken. a4 is now broken.",
+      confidence: 2,
+      changeNote:
+        "Marked a4 broken. My exit condition names a4 explicitly, so on my own written rule this position should be closed or halved. I have not done it yet, and I want that gap visible rather than quietly resolved by rewriting the condition.",
+    },
+    {
       id: "th_fcx_1",
       positionId: "pos_fcx",
       versionNo: 1,
@@ -838,7 +879,9 @@ export function seedDatabase(db: DatabaseType.Database) {
     {
       id: "ev_nvda_q2_past",
       positionId: "pos_nvda",
-      title: "NVIDIA Q2 results (the add was sized ahead of this)",
+      // Must not hint at what was decided: this event is shown inside the sealed
+      // Replay room for the add, where naming it gives the answer away.
+      title: "NVIDIA Q2 results and next-quarter guide",
       kind: "earnings",
       occurredAt: d(292),
       knownAt: d(310),
