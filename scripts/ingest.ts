@@ -28,6 +28,9 @@ const wantFilings = wants("--filings");
 
 async function main() {
   const db = getDb();
+  // A dated header, because this output is appended to data/ingest.log by the
+  // scheduled task and an undated log is close to useless.
+  console.log(`\n=== ${new Date().toISOString()} ${argv.length ? argv.join(" ") : "(all sources)"} ===`);
 
   if (wantUniverse) {
     if (needsRefresh() || picked.includes("--universe")) {

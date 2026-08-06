@@ -82,6 +82,8 @@ export interface CalibrationBucket {
   mixed: number;
   failed: number;
   realisedPct: number;
+  /** Wilson interval, so a bucket of one is visibly uninformative. */
+  interval: { low: number; high: number; spread: number };
   decisions: Decision[];
 }
 

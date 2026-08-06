@@ -30,6 +30,15 @@ import {
   listMonitors,
   read,
 } from "../src/lib/monitors";
+import {
+  brierScore,
+  separated,
+  summariseBrier,
+  uninformedBrier,
+  wilson,
+} from "../src/lib/stats";
+import { getDecisionNudges } from "../src/lib/nudges";
+import { aiConfig, aiEnabled, aiLabel } from "../src/lib/ai-config";
 import { closeDb, openDb } from "../src/lib/db";
 
 const FIX = path.join(process.cwd(), "scripts", "fixtures");
@@ -524,6 +533,131 @@ check("describeMonitor reads as a sentence for every kind", () => {
     const m = listMonitors().find((x) => x.id === id)!;
     assert.match(describeMonitor(m), expected, `${kind} reads badly: ${describeMonitor(m)}`);
     deleteMonitor(id);
+  }
+});
+
+console.log("\nstatistics");
+
+check("a Wilson interval stays inside 0-100 and widens as the sample shrinks", () => {
+  const wide = wilson(1, 1);
+  const narrow = wilson(80, 100);
+  assert.ok(wide.low >= 0 && wide.high <= 100);
+  // The failure this replaces: a bucket of one at 100% used to report [100,100].
+  assert.ok(wide.low < 50, `a single success should not imply certainty, got ${wide.low}`);
+  assert.equal(wide.high, 100);
+  assert.ok(wide.spread > narrow.spread, "less data must mean a wider interval");
+  assert.ok(narrow.low > 65 && narrow.high < 90, `80/100 should be tight, got ${JSON.stringify(narrow)}`);
+  assert.deepEqual(wilson(0, 0), { low: 0, high: 100, spread: 50 }, "no data says nothing");
+});
+
+check("separated() only reports a difference the intervals support", () => {
+  assert.ok(!separated(wilson(5, 9), wilson(7, 9)), "nine decisions cannot separate these");
+  assert.ok(separated(wilson(5, 500), wilson(400, 500)), "five hundred can");
+});
+
+check("a Brier score rewards a confident correct call over a hedge", () => {
+  const confidentRight = brierScore({ Bull: 80, Base: 15, Bear: 5 }, "Bull")!;
+  const hedged = brierScore({ Bull: 34, Base: 33, Bear: 33 }, "Bull")!;
+  const confidentWrong = brierScore({ Bull: 80, Base: 15, Bear: 5 }, "Bear")!;
+  assert.ok(confidentRight < hedged, "being right and sure should score best");
+  assert.ok(hedged < confidentWrong, "hedging should beat being confidently wrong");
+  assert.ok(confidentRight >= 0 && confidentWrong <= 1);
+  // Percentages and fractions must score identically.
+  assert.ok(
+    Math.abs(brierScore({ Bull: 0.8, Base: 0.15, Bear: 0.05 }, "Bull")! - confidentRight) < 1e-9
+  );
+});
+
+check("a Brier score is refused rather than guessed when it cannot be computed", () => {
+  assert.equal(brierScore({}, "Bull"), null);
+  assert.equal(brierScore({ Bull: 50, Bear: 50 }, "Sideways"), null, "unknown outcome");
+  assert.equal(brierScore({ Bull: 0, Bear: 0 }, "Bull"), null, "no probability mass");
+});
+
+check("skill is measured against knowing nothing, not against zero", () => {
+  const perfect = summariseBrier([{ score: 0, outcomes: 3 }])!;
+  assert.ok(perfect.skill > 0.9, `a perfect forecast should score near 1, got ${perfect.skill}`);
+  const useless = summariseBrier([{ score: uninformedBrier(3), outcomes: 3 }])!;
+  assert.ok(Math.abs(useless.skill) < 1e-9, "matching the baseline is zero skill");
+  assert.equal(summariseBrier([]), null);
+});
+
+console.log("\ndecision-time nudges");
+
+check("adding into a weakening thesis is flagged before the decision is written", () => {
+  // Break an assumption on the test position, then ask for nudges on an add.
+  db.prepare("update thesis_versions set assumptions=? where id='th_t'").run(
+    JSON.stringify([
+      { id: "a1", text: "The margin assumption.", status: "broken" },
+      { id: "a2", text: "The second assumption.", status: "weakening" },
+    ])
+  );
+  db.prepare("update thesis_versions set addCondition=? where id='th_t'").run(
+    "No further adds. I have used my add."
+  );
+  const nudges = getDecisionNudges("pos_t", "add");
+  const ids = nudges.map((n) => n.id);
+  assert.ok(ids.includes("nudge_no_add"), "a written 'no further adds' must be surfaced");
+  assert.ok(ids.includes("nudge_add_weak"), "two shaky assumptions must be surfaced");
+  assert.equal(nudges[0].tone, "stop", "the hardest nudges come first");
+  for (const n of nudges) {
+    assert.ok(n.headline.length > 0 && n.detail.length > 0);
+    // A nudge must never instruct.
+    assert.ok(!/\byou should\b|\bwe recommend\b/i.test(`${n.headline} ${n.detail}`));
+  }
+});
+
+check("holding against your own broken exit condition is flagged", () => {
+  db.prepare("update thesis_versions set exitCondition=? where id='th_t'").run(
+    "Any falsifier fires, or a1 moving to broken."
+  );
+  const ids = getDecisionNudges("pos_t", "hold").map((n) => n.id);
+  assert.ok(ids.includes("nudge_hold_against_rule"));
+});
+
+check("no position means no nudges rather than generic advice", () => {
+  assert.deepEqual(getDecisionNudges(null, "add"), []);
+  assert.deepEqual(getDecisionNudges("pos_does_not_exist", "add"), []);
+});
+
+console.log("\nmodel layer");
+
+check("the model layer is off and inert without a key", () => {
+  const saved = {
+    a: process.env.ANTHROPIC_API_KEY,
+    o: process.env.OPENAI_API_KEY,
+    m: process.env.ASOF_AI_MODEL,
+  };
+  delete process.env.ANTHROPIC_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  delete process.env.ASOF_AI_MODEL;
+  try {
+    assert.equal(aiEnabled(), false);
+    assert.equal(aiConfig(), null);
+    assert.equal(aiLabel(), null);
+
+    // A key alone is enough; the model id is optional.
+    process.env.ANTHROPIC_API_KEY = "test-key-not-real";
+    assert.equal(aiEnabled(), true);
+    assert.equal(aiConfig()!.provider, "anthropic");
+    assert.ok(aiConfig()!.modelId.length > 0, "a default model is chosen");
+
+    // An explicit provider that has no key must not silently fall through.
+    process.env.ASOF_AI_MODEL = "openai:gpt-4.1-mini";
+    assert.equal(aiEnabled(), false, "naming a provider with no key must disable it");
+
+    process.env.ASOF_AI_MODEL = "anthropic:some-model";
+    assert.equal(aiConfig()!.modelId, "some-model");
+
+    process.env.ASOF_AI_MODEL = "nonsense:whatever";
+    assert.equal(aiConfig(), null, "an unknown provider is not guessed at");
+  } finally {
+    if (saved.a === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = saved.a;
+    if (saved.o === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = saved.o;
+    if (saved.m === undefined) delete process.env.ASOF_AI_MODEL;
+    else process.env.ASOF_AI_MODEL = saved.m;
   }
 });
 

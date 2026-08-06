@@ -1,5 +1,13 @@
 import { getDb } from "./db";
 import { calendarDaysBetween, describeSpan } from "./format";
+import {
+  MIN_FOR_CLAIM,
+  brierScore,
+  separated,
+  summariseBrier,
+  wilson,
+  type BrierSummary,
+} from "./stats";
 import type {
   Assumption,
   AttentionItem,
@@ -732,18 +740,70 @@ export function getCalibration(asOf?: string): CalibrationBucket[] {
     if (inBucket.length === 0) continue;
     const worked = inBucket.filter((d) => d.outcomeVerdict === "worked").length;
     const mixed = inBucket.filter((d) => d.outcomeVerdict === "mixed").length;
+    // Mixed counts as a half, so the numerator can be fractional.
+    const effective = worked + mixed * 0.5;
     buckets.push({
       confidence: c,
       count: inBucket.length,
       worked,
       mixed,
       failed: inBucket.length - worked - mixed,
-      // Mixed counts as a half.
-      realisedPct: ((worked + mixed * 0.5) / inBucket.length) * 100,
+      realisedPct: (effective / inBucket.length) * 100,
+      // An interval, so a bucket of one cannot masquerade as the strongest
+      // signal on the page.
+      interval: wilson(effective, inBucket.length),
       decisions: inBucket,
     });
   }
   return buckets;
+}
+
+/**
+ * Scores the scenario probabilities the user wrote before each resolved event.
+ *
+ * The app has been collecting genuinely scorable forecasts and discarding them.
+ * The scenario judged closest to what happened is inferred from the recorded
+ * verdicts: a forecast the user marked accurate scores against their most likely
+ * scenario, an inaccurate one against the least likely. That is a reading of
+ * their own judgment rather than an independent one, and the page says so.
+ */
+export function getForecastScore(asOf?: string): BrierSummary | null {
+  const resolved = listEvents({ asOf }).filter((e) => e.outcome && e.scenarios.length >= 2);
+  const scores: Array<{ score: number; outcomes: number }> = [];
+
+  for (const e of resolved) {
+    const probs: Record<string, number> = {};
+    for (const s of e.scenarios) probs[s.name] = s.probability;
+    const ordered = [...e.scenarios].sort((a, b) => b.probability - a.probability);
+
+    const verdict = e.outcome!.forecastAccurate;
+    const landed =
+      verdict === "yes"
+        ? ordered[0].name
+        : verdict === "no"
+          ? ordered[ordered.length - 1].name
+          : ordered[Math.floor(ordered.length / 2)].name;
+
+    const score = brierScore(probs, landed);
+    if (score !== null) scores.push({ score, outcomes: e.scenarios.length });
+  }
+  return summariseBrier(scores);
+}
+
+/**
+ * Was this add made into a thesis whose assumption set was already shaky?
+ *
+ * Exported because the same definition has to serve two places: the
+ * retrospective pattern card, and the prospective nudge shown while a decision
+ * is being recorded. Two copies would drift.
+ */
+export const WEAK_ASSUMPTION_FLOOR = 2;
+
+export function wasAddIntoWeakness(d: Decision): boolean {
+  if (!d.positionId) return false;
+  const t = getThesisAt(d.positionId, justBefore(d.occurredAt));
+  if (!t) return false;
+  return t.assumptions.filter((a) => a.status !== "intact").length >= WEAK_ASSUMPTION_FLOOR;
 }
 
 /**
@@ -767,19 +827,29 @@ export function getPatterns(asOf?: string): Pattern[] {
     const hRate = weighted(high);
     const mRate = weighted(mid);
     if (hRate <= mRate + 5) {
-      const strictlyWorse = hRate < mRate;
+      // Pooled intervals, so the wording can never outrun the sample. With this
+      // little data the honest claim is "cannot yet tell them apart", not
+      // "your confidence is inverted".
+      const hInt = wilson((hRate / 100) * hN, hN);
+      const mInt = wilson((mRate / 100) * mN, mN);
+      const distinguishable = separated(hInt, mInt);
+      const enough = hN + mN >= MIN_FOR_CLAIM;
+
       out.push({
         id: "pat_calibration",
-        title: strictlyWorse
-          ? "Your confidence does not sort your outcomes"
-          : "Your confidence barely sorts your outcomes",
-        finding: `Decisions you rated 4–5 out of 5 (n=${hN}) realised ${Math.round(hRate)}% of what you hoped for. Decisions you rated 3 (n=${mN}) realised ${Math.round(mRate)}%. ${
-          strictlyWorse
-            ? "Higher stated conviction has produced worse results in this book."
-            : "The gap is inside the noise a book this small can resolve."
-        }`,
-        soWhat:
-          "Confidence is currently closer to a measure of how much you like the idea than of how likely it is. Until it separates outcomes, using it to size positions transmits enthusiasm into risk.",
+        title: distinguishable
+          ? "Your confidence sorts your outcomes the wrong way round"
+          : "Your confidence does not yet sort your outcomes",
+        finding:
+          `Decisions you rated 4–5 out of 5 (n=${hN}) realised ${Math.round(hRate)}% of what you hoped for, ` +
+          `somewhere between ${Math.round(hInt.low)}% and ${Math.round(hInt.high)}%. ` +
+          `Decisions you rated 3 (n=${mN}) realised ${Math.round(mRate)}%, between ${Math.round(mInt.low)}% and ${Math.round(mInt.high)}%. ` +
+          (distinguishable
+            ? "Those ranges do not overlap, so the ordering is real on this record."
+            : `Those ranges overlap, so this is a book too small to tell the two apart${enough ? "" : " — and below the eight closed loops needed to say anything at all"}.`),
+        soWhat: distinguishable
+          ? "Confidence is currently closer to a measure of how much you like an idea than of how likely it is. Using it to size positions transmits enthusiasm into risk."
+          : "The useful conclusion is not that you are miscalibrated — it is that you cannot know yet. Recording outcomes on the decisions still open is what would settle it.",
         evidence: [...high, ...mid].flatMap((b) => b.decisions),
       });
     }
@@ -787,10 +857,7 @@ export function getPatterns(asOf?: string): Pattern[] {
 
   // Adding into a thesis that was already weakening.
   const adds = decisions.filter((d) => d.type === "add" && d.positionId);
-  const addsIntoWeakness = adds.filter((d) => {
-    const t = getThesisAt(d.positionId!, justBefore(d.occurredAt));
-    return t ? t.assumptions.filter((a) => a.status !== "intact").length >= 2 : false;
-  });
+  const addsIntoWeakness = adds.filter(wasAddIntoWeakness);
   if (addsIntoWeakness.length > 0) {
     const bad = addsIntoWeakness.filter((d) => d.outcomeVerdict === "did_not_work");
     const clean = adds.filter((d) => !addsIntoWeakness.includes(d));

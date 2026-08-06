@@ -90,6 +90,7 @@ export default async function PositionPage({ params }: { params: Promise<{ id: s
         }
         actions={
           <>
+            <ButtonLink href={`/positions/${id}/read`}>Read a document</ButtonLink>
             <ButtonLink href={`/positions/${id}/evidence`}>Add evidence</ButtonLink>
             <ButtonLink href={`/decisions/new?position=${id}`} variant="solid">
               Record a decision

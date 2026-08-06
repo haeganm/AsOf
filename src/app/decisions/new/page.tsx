@@ -12,6 +12,7 @@ import {
   todayValue,
 } from "@/components/forms";
 import { ActionForm } from "@/components/action-form";
+import { DecisionNudges } from "@/components/nudges";
 import { PageHeader } from "@/components/ui";
 
 export default async function NewDecisionPage({
@@ -70,6 +71,8 @@ export default async function NewDecisionPage({
             placeholder="Trim 120 shares at $138, taking the position down about a quarter."
           />
         </FormBlock>
+
+        <DecisionNudges />
 
         <FormBlock label="Why" title="Written for the version of you that reads this in eighteen months.">
           <Prose

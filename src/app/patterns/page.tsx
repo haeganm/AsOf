@@ -1,5 +1,11 @@
 import Link from "next/link";
-import { getCalibration, getPatterns, listDecisions, listEvents } from "@/lib/queries";
+import {
+  getCalibration,
+  getForecastScore,
+  getPatterns,
+  listDecisions,
+  listEvents,
+} from "@/lib/queries";
 import { DECISION_LABEL } from "@/lib/types";
 import { pct, shortDate } from "@/lib/format";
 import { Badge, ConfidenceMeter, Empty, PageHeader, Section, VerdictMark } from "@/components/ui";
@@ -58,6 +64,22 @@ function Calibration({ buckets }: { buckets: ReturnType<typeof getCalibration> }
             strokeWidth="1.25"
           />
         )}
+        {/* Intervals first, so the dots sit on top of them. A wide bar is the
+            page telling you the bucket cannot support a conclusion. */}
+        {buckets.map((b) => (
+          <g key={`ci-${b.confidence}`}>
+            <line
+              x1={x(b.confidence)}
+              x2={x(b.confidence)}
+              y1={y(b.interval.high)}
+              y2={y(b.interval.low)}
+              stroke="#c9c9c5"
+              strokeWidth="6"
+              strokeLinecap="butt"
+            />
+          </g>
+        ))}
+
         {buckets.map((b) => (
           <g key={b.confidence}>
             <circle
@@ -81,9 +103,12 @@ function Calibration({ buckets }: { buckets: ReturnType<typeof getCalibration> }
         ))}
       </svg>
       <figcaption className="mt-3 max-w-[62ch] text-[11.5px] leading-relaxed text-ink-3">
-        Dot size is the number of decisions in that bucket. A decision you judged “mixed” counts as
-        half. The dashed diagonal is only a convention for what an evenly ordered 1–5 scale would
-        look like, not a target — what matters is whether your dots rise from left to right at all.
+        Dot size is the number of decisions in that bucket and a decision you judged “mixed” counts
+        as half. The grey bar behind each dot is a 95% interval: a tall bar means that bucket has too
+        few decisions to say anything, which is worth more than a confident-looking number. The
+        dashed diagonal is only a convention for what an evenly ordered 1–5 scale would look like,
+        not a target — what matters is whether your dots rise from left to right by more than their
+        bars overlap.
       </figcaption>
     </figure>
   );
@@ -91,6 +116,7 @@ function Calibration({ buckets }: { buckets: ReturnType<typeof getCalibration> }
 
 export default function PatternsPage() {
   const buckets = getCalibration();
+  const forecast = getForecastScore();
   const patterns = getPatterns();
   const decisions = listDecisions();
   const resolved = decisions.filter((d) => d.outcomeVerdict);
@@ -127,8 +153,11 @@ export default function PatternsPage() {
                         <span className="num text-[12px] text-ink-2">
                           {b.worked}W · {b.mixed}M · {b.failed}L
                         </span>
-                        <span className="num w-[46px] text-right text-[12.5px]">
+                        <span className="num w-[112px] text-right text-[12.5px]">
                           {Math.round(b.realisedPct)}%
+                          <span className="ml-1.5 text-[10.5px] text-ink-4">
+                            ±{Math.round(b.interval.spread)}
+                          </span>
                         </span>
                       </div>
                     </li>
@@ -136,8 +165,33 @@ export default function PatternsPage() {
                 </ul>
                 <p className="writing mt-5 text-[13px]">
                   Read this as a question rather than a score: when you write 4 or 5, does anything
-                  measurable change? On this record, the honest answer is what the dots show.
+                  measurable change? The ± is how much the answer could move with this many
+                  decisions — on a book this size it is usually wider than the gap you are looking at.
                 </p>
+
+                {forecast && (
+                  <div className="mt-8 border-t border-rule pt-5">
+                    <div className="label label-ink mb-2">Forecast score</div>
+                    <p className="writing text-[13.5px]">
+                      Across {forecast.scored} event{forecast.scored === 1 ? "" : "s"} where you wrote
+                      probabilities before the outcome, your Brier score is{" "}
+                      <span className="num">{forecast.mean.toFixed(3)}</span> against{" "}
+                      <span className="num">{forecast.baseline.toFixed(3)}</span> for spreading
+                      probability evenly — a skill score of{" "}
+                      <span className="num">{(forecast.skill * 100).toFixed(0)}%</span>.{" "}
+                      {forecast.skill > 0.05
+                        ? "Better than knowing nothing, which is the bar that matters and one most forecasts do not clear."
+                        : forecast.skill > -0.05
+                          ? "Indistinguishable from spreading probability evenly, which is what a hedged forecast looks like when scored."
+                          : "Worse than spreading probability evenly, meaning the confident scenarios were the wrong ones."}
+                    </p>
+                    <p className="mt-2 text-[11.5px] leading-snug text-ink-3">
+                      Lower is better; 0 is perfect. Which scenario landed is inferred from your own
+                      recorded verdict on whether the forecast was accurate, so this measures the
+                      consistency of your judgment rather than grading it independently.
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
           </Section>

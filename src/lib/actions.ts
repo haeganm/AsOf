@@ -9,6 +9,7 @@ import { syncPrices } from "./ingest/prices";
 import { getSecurity } from "./ingest/securities";
 import { getThesisAt } from "./queries";
 import { createMonitor, evaluateMonitors } from "./monitors";
+import { aiEnabled, aiLabel, readAgainstThesis } from "./ai";
 import type { Assumption, DecisionType } from "./types";
 import { DECISION_TYPES } from "./types";
 
@@ -693,6 +694,83 @@ async function addMonitorImpl(fd: FormData) {
   redirect(`/positions/${positionId}`);
 }
 
+// ── optional model-assisted drafting ──────────────────────────────────────
+
+/**
+ * Reads a pasted document against the current thesis and files what it finds as
+ * evidence — one row per assumption the document genuinely speaks to.
+ *
+ * Everything written is marked `origin='ingested'` and stays editable. The model
+ * drafts; the user owns. Nothing is sent anywhere until this action runs, which
+ * only happens on an explicit button press.
+ */
+async function readDocumentImpl(fd: FormData) {
+  if (!aiEnabled()) throw new Error("No model is configured, so this cannot run.");
+  const positionId = str(fd, "positionId", { required: true });
+  mustExist("positions", positionId);
+  const document = str(fd, "document", { required: true, max: 60_000 });
+  const source = str(fd, "source", { max: 160 }) || "Pasted document";
+  const at = dateOr(fd, "occurredAt");
+
+  const db = getDb();
+  const p = db.prepare("select ticker from positions where id=?").get(positionId) as {
+    ticker: string;
+  };
+  const thesis = getThesisAt(positionId);
+  if (!thesis) throw new Error("This position has no thesis to read the document against.");
+
+  const result = await readAgainstThesis({
+    ticker: p.ticker,
+    thesisSummary: thesis.summary,
+    assumptions: thesis.assumptions,
+    document,
+  });
+
+  const written = nowIso();
+  db.transaction(() => {
+    // The overall read, always recorded so there is a trace even when it found
+    // nothing to link.
+    db.prepare(
+      `insert into evidence (id,positionId,occurredAt,kind,source,title,body,stance,contradictsAssumptionId,createdAt,origin,externalId)
+       values (?,?,?, 'fact', ?, ?, ?, 'neutral', null, ?, 'ingested', null)`
+    ).run(
+      newId("evd"),
+      positionId,
+      at,
+      source,
+      `${p.ticker}: ${source}`,
+      result.summary +
+        (result.newDependency ? `\n\nNew dependency noted: ${result.newDependency}` : "") +
+        (result.questions.length ? `\n\nTo check: ${result.questions.join(" · ")}` : "") +
+        `\n\nRead by ${aiLabel()}. Drafted, not verified.`,
+      written
+    );
+
+    for (const t of result.touches) {
+      if (t.direction === "unclear") continue;
+      db.prepare(
+        `insert into evidence (id,positionId,occurredAt,kind,source,title,body,stance,contradictsAssumptionId,createdAt,origin,externalId)
+         values (?,?,?, 'fact', ?, ?, ?, ?, ?, ?, 'ingested', null)`
+      ).run(
+        newId("evd"),
+        positionId,
+        at,
+        source,
+        `${p.ticker}: ${t.direction === "contradicts" ? "against" : "supports"} “${
+          thesis.assumptions.find((a) => a.id === t.assumptionId)?.text.slice(0, 70) ?? t.assumptionId
+        }”`,
+        `${t.why}\n\nDrafted by ${aiLabel()} from ${source}. Edit or delete it if the reading is wrong.`,
+        t.direction,
+        t.direction === "contradicts" ? t.assumptionId : null,
+        written
+      );
+    }
+  })();
+
+  refresh(`/positions/${positionId}`);
+  redirect(`/positions/${positionId}`);
+}
+
 // ── replay ────────────────────────────────────────────────────────────────
 
 async function saveReplayAttemptImpl(fd: FormData) {
@@ -777,4 +855,8 @@ export async function saveHindsightNote(_prev: ActionState, fd: FormData): Promi
 
 export async function addMonitor(_prev: ActionState, fd: FormData): Promise<ActionState> {
   return run(fd, () => addMonitorImpl(fd));
+}
+
+export async function readDocument(_prev: ActionState, fd: FormData): Promise<ActionState> {
+  return run(fd, () => readDocumentImpl(fd));
 }
