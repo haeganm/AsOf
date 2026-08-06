@@ -108,6 +108,27 @@ export async function syncPrices(
 }
 
 /**
+ * Removes stale duplicate-date rows from the sym_* series: when two fetched
+ * marks share a calendar date, only the latest-stamped survives. Legacy weekly
+ * bars (04:00 stamp, week's closing price) beside daily bars (13:30 stamp,
+ * that day's close) would otherwise hand the grader a close from days in the
+ * future. Manual marks are never touched. Idempotent, runs after every sync.
+ */
+export function dedupeSymbolDays(): number {
+  return getDb()
+    .prepare(
+      `delete from marks where positionId like 'sym!_%' escape '!' and source != 'manual'
+       and exists (
+         select 1 from marks m2
+         where m2.positionId = marks.positionId
+           and substr(m2.occurredAt, 1, 10) = substr(marks.occurredAt, 1, 10)
+           and m2.occurredAt > marks.occurredAt
+       )`
+    )
+    .run().changes;
+}
+
+/**
  * Weekly closes, sampled from whatever daily marks exist. Used by the correlation
  * check — weekly returns are less noisy than daily and tolerate the odd gap.
  */

@@ -40,6 +40,9 @@ const ROUTES = [
   "/replay/dec_nke_add?reveal=rp_seed_1",
   "/patterns",
   "/postmortems/pm_pypl",
+  "/scorecard",
+  "/signals",
+  "/signals?source=monitor&symbol=NKE",
 ];
 
 async function main() {

@@ -210,6 +210,54 @@ create table if not exists replay_attempts (
   hindsightNote text
 );
 
+-- The signal spine. A signal is any timestamped, sealed claim that something
+-- notable happened for a symbol: an insider cluster buy, an 8-K, a monitor
+-- firing, an imported alert, one of your own decisions. Grading always keys off
+-- knownAt (when it became publicly knowable), never firedAt — and a row sealed
+-- long after it was knowable carries backfilled=1 so the scorecard can refuse it.
+create table if not exists signals (
+  id text primary key,
+  source text not null,
+  kind text not null,
+  symbol text not null,
+  direction text not null default 'info',
+  firedAt text not null,
+  knownAt text not null,
+  sealedAt text not null,
+  backfilled integer not null default 0,
+  title text not null,
+  detail text,
+  externalId text,
+  meta text not null default '{}'
+);
+
+-- One row per (signal, horizon), written only once the horizon has fully
+-- elapsed. An outcome row existing is itself the honesty guarantee: nothing is
+-- graded early, and nothing is ever revised.
+create table if not exists signal_outcomes (
+  signalId text not null,
+  horizonDays integer not null,
+  entryAt text not null,
+  exitAt text not null,
+  signalReturn real not null,
+  benchmarkReturn real not null,
+  excessReturn real not null,
+  computedAt text not null,
+  primary key (signalId, horizonDays)
+);
+
+-- The tracked set for automatic sources (filings, insiders) and daily price
+-- sync. Seeded from data-static/universe-default.txt; the user's own positions
+-- are always implicitly tracked too.
+create table if not exists universe (
+  symbol text primary key,
+  cik text,
+  name text,
+  active integer not null default 1,
+  form4Watermark text,
+  addedAt text not null
+);
+
 `;
 
 /** Applied after `migrate`, because some of these index the added columns. */
@@ -238,6 +286,10 @@ drop index if exists uq_evidence_ext;
 drop index if exists uq_events_ext;
 create unique index if not exists uq_evidence_extid on evidence(externalId);
 create unique index if not exists uq_events_extid on events(externalId);
+create unique index if not exists uq_signals_extid on signals(externalId);
+create index if not exists idx_signals_source on signals(source, knownAt);
+create index if not exists idx_signals_kind on signals(kind, knownAt);
+create index if not exists idx_signals_symbol on signals(symbol, knownAt);
 `;
 
 /**
@@ -350,6 +402,12 @@ export function resetDb(db: Database.Database) {
     "monitors",
   ];
   for (const t of tables) db.exec(`delete from ${t}`);
+  // Signals collected live from the market (insiders, filings, imports) are
+  // irreplaceable history — a scorecard that resets with the demo book is
+  // worthless. Only book-owned signals (your decisions, your monitors) go with
+  // the book they belonged to.
+  db.exec("delete from signals where source in ('journal','monitor')");
+  db.exec("delete from signal_outcomes where signalId not in (select id from signals)");
 }
 
 export function newId(prefix: string) {

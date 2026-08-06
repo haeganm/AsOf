@@ -1,6 +1,8 @@
 import { getDb, newId, nowIso } from "./db";
 import { symbolSeriesId } from "./correlation-report";
+import { lastPerDay } from "./grade";
 import { getThesisAt } from "./queries";
+import { recordSignal } from "./signals";
 
 /**
  * Monitors turn a written claim into something that can fire.
@@ -58,11 +60,13 @@ export const KIND_LABEL: Record<MonitorKind, string> = {
 
 const DAY = 86_400_000;
 
-/** Daily closes for a symbol, newest last. */
+/** Daily closes for a symbol, newest last, one bar per date (see lastPerDay). */
 function series(symbol: string): Array<{ at: string; close: number }> {
-  return getDb()
-    .prepare("select occurredAt as at, price as close from marks where positionId=? order by occurredAt")
-    .all(symbolSeriesId(symbol)) as Array<{ at: string; close: number }>;
+  return lastPerDay(
+    getDb()
+      .prepare("select occurredAt as at, price as close from marks where positionId=? order by occurredAt")
+      .all(symbolSeriesId(symbol)) as Array<{ at: string; close: number }>
+  );
 }
 
 export interface Reading {
@@ -180,11 +184,25 @@ export function evaluateMonitors(now = new Date()): Transition[] {
 }
 
 /**
- * A firing becomes an ordinary piece of evidence. Linked to the assumption when
- * the monitor names one — which is what makes the attention queue say "your
- * thesis has not been revisited since this arrived".
+ * A firing becomes two ordinary records: a signal (always — it is a sealed,
+ * gradeable claim about the symbol), and a piece of evidence when the monitor
+ * belongs to a position. Linked to the assumption when the monitor names one —
+ * which is what makes the attention queue say "your thesis has not been
+ * revisited since this arrived".
  */
 function recordFiring(m: Monitor, describe: string, at: string) {
+  recordSignal({
+    source: "monitor",
+    kind: `monitor_${m.kind}`,
+    symbol: m.symbol,
+    direction: "info",
+    firedAt: at,
+    knownAt: at,
+    title: `${m.label} — condition met`,
+    detail: describe,
+    externalId: `sig:monitor:${m.id}:${at.slice(0, 10)}`,
+  });
+
   if (!m.positionId) return;
   const db = getDb();
 

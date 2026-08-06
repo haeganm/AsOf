@@ -661,6 +661,234 @@ check("the model layer is off and inert without a key", () => {
   }
 });
 
+// ── the signal spine ──────────────────────────────────────────────────────
+
+import { entryBar, grade, isHit, lastPerDay, sessionEndUtc, type DailyBar } from "../src/lib/grade";
+import { dedupeSymbolDays } from "../src/lib/ingest/prices";
+import {
+  aggregateSignals,
+  computeOutcomes,
+  outcomesFor,
+  recordSignal,
+} from "../src/lib/signals";
+import { ensureUniverse, readUniverseFile } from "../src/lib/ingest/universe";
+import { resetDb } from "../src/lib/db";
+
+console.log("\nsignal spine:");
+
+check("session end is DST-aware", () => {
+  assert.equal(sessionEndUtc("2026-07-15"), "2026-07-15T20:00:00.000Z"); // EDT: 4pm = 20:00Z
+  assert.equal(sessionEndUtc("2026-01-15"), "2026-01-15T21:00:00.000Z"); // EST: 4pm = 21:00Z
+});
+
+/** Weekday-only daily bars from a start date, stamped at 14:30Z like Yahoo's. */
+function mkBars(start: string, closes: number[]): DailyBar[] {
+  const out: DailyBar[] = [];
+  const d = new Date(`${start}T14:30:00.000Z`);
+  for (const close of closes) {
+    while (d.getUTCDay() === 0 || d.getUTCDay() === 6) d.setUTCDate(d.getUTCDate() + 1);
+    out.push({ at: d.toISOString(), close });
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  return out;
+}
+
+// 2026-07-06 is a Monday. Bars: 7/6, 7/7, 7/8, 7/9, 7/10, 7/13, …
+const symBars = mkBars("2026-07-06", [100, 102, 104, 106, 108, 110, 112, 114, 116, 118]);
+
+check("pre-open knowledge enters at that same day's close", () => {
+  // Accepted 08:00 ET on 7/7 (12:00Z) — the 7/7 session had not ended.
+  assert.equal(entryBar(symBars, "2026-07-07T12:00:00.000Z")!.close, 102);
+});
+check("intraday knowledge enters at that same day's close", () => {
+  assert.equal(entryBar(symBars, "2026-07-07T15:00:00.000Z")!.close, 102);
+});
+check("after-hours knowledge waits for the next day's close", () => {
+  // Accepted 17:30 ET on 7/7 (21:30Z) — after the 20:00Z EDT session end.
+  assert.equal(entryBar(symBars, "2026-07-07T21:30:00.000Z")!.close, 104);
+});
+
+check("grade computes excess vs the benchmark over the same dates", () => {
+  const bench = mkBars("2026-07-06", [200, 200, 200, 200, 200, 210, 210, 210, 210, 210]);
+  const g = grade(symBars, bench, "2026-07-06T12:00:00.000Z", 5);
+  assert.equal(g.status, "graded");
+  if (g.status !== "graded") return;
+  // Entry 7/6 (100 vs 200); exit 5 benchmark trading days later = 7/13 (110 vs 210).
+  assert.ok(Math.abs(g.signalReturn - 0.1) < 1e-9, `signal ${g.signalReturn}`);
+  assert.ok(Math.abs(g.benchmarkReturn - 0.05) < 1e-9, `bench ${g.benchmarkReturn}`);
+  assert.ok(Math.abs(g.excessReturn - 0.05) < 1e-9, `excess ${g.excessReturn}`);
+});
+
+check("a horizon that has not elapsed is pending, not graded", () => {
+  const bench = mkBars("2026-07-06", [200, 201, 202, 203, 204, 205, 206, 207, 208, 209]);
+  assert.equal(grade(symBars, bench, "2026-07-06T12:00:00.000Z", 20).status, "pending");
+});
+
+check("a missing symbol bar near the exit uses the last print, same shared dates", () => {
+  // Symbol skips the 7/13 bar (halt); exit falls back to 7/10's close within the stale limit.
+  const gappy = symBars.filter((b) => !b.at.startsWith("2026-07-13"));
+  const bench = mkBars("2026-07-06", [200, 200, 200, 200, 200, 210, 210, 210, 210, 210]);
+  const g = grade(gappy, bench, "2026-07-06T12:00:00.000Z", 5);
+  assert.equal(g.status, "graded");
+  if (g.status !== "graded") return;
+  assert.ok(Math.abs(g.signalReturn - 0.08) < 1e-9, "exited at 7/10's 108");
+});
+
+check("a series that dies before the horizon is ungraded, never guessed", () => {
+  const dead = symBars.slice(0, 3); // last print 7/8
+  const bench = mkBars("2026-07-06", Array.from({ length: 40 }, (_, i) => 200 + i));
+  assert.equal(grade(dead, bench, "2026-07-06T12:00:00.000Z", 20).status, "ungraded");
+});
+
+check("a week-close bar stamped at week start cannot poison the entry price", () => {
+  // The live defect: a legacy weekly bar at 04:00 on Monday carrying FRIDAY's
+  // close (CEG 2024-09-16: 254.98 vs Monday's real 199.25). One bar per date,
+  // latest stamp wins.
+  const poisoned: DailyBar[] = [
+    { at: "2026-07-06T04:00:00.000Z", close: 254.98 }, // weekly, Friday's close
+    { at: "2026-07-06T14:30:00.000Z", close: 199.25 }, // daily, Monday's real close
+    { at: "2026-07-07T14:30:00.000Z", close: 201.0 },
+  ];
+  const clean = lastPerDay(poisoned);
+  assert.equal(clean.length, 2);
+  assert.equal(clean[0].close, 199.25, "Monday keeps Monday's close");
+});
+
+check("dedupeSymbolDays purges the stale twin and keeps the daily bar", () => {
+  const sid = symbolSeriesId("TSTDUP");
+  storeBars(sid, [
+    { occurredAt: "2026-07-06T04:00:00.000Z", close: 254.98 },
+    { occurredAt: "2026-07-06T14:30:00.000Z", close: 199.25 },
+  ]);
+  const purged = dedupeSymbolDays();
+  assert.ok(purged >= 1, `purged ${purged}`);
+  const rows = db
+    .prepare("select price from marks where positionId=? order by occurredAt")
+    .all(sid) as Array<{ price: number }>;
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].price, 199.25);
+});
+
+check("hits follow direction; info signals have none", () => {
+  assert.equal(isHit("long", 0.02), true);
+  assert.equal(isHit("long", -0.02), false);
+  assert.equal(isHit("short", -0.02), true);
+  assert.equal(isHit("info", 0.02), null);
+});
+
+check("recordSignal is idempotent on externalId", () => {
+  const first = recordSignal({
+    source: "test", kind: "k_idem", symbol: "TSTA", direction: "long",
+    firedAt: "2026-07-06T12:00:00.000Z", knownAt: "2026-07-06T12:00:00.000Z",
+    title: "one", externalId: "sig:test:idem",
+  });
+  const second = recordSignal({
+    source: "test", kind: "k_idem", symbol: "TSTA", direction: "long",
+    firedAt: "2026-07-06T12:00:00.000Z", knownAt: "2026-07-06T12:00:00.000Z",
+    title: "two", externalId: "sig:test:idem",
+  });
+  assert.ok(first !== null && second === null);
+  const n = (db.prepare("select count(*) as n from signals where externalId='sig:test:idem'").get() as { n: number }).n;
+  assert.equal(n, 1);
+});
+
+check("a stale knownAt is auto-flagged as backfilled; a fresh one is not", () => {
+  recordSignal({
+    source: "test", kind: "k_bf", symbol: "TSTA", direction: "long",
+    firedAt: "2026-07-06T12:00:00.000Z", knownAt: "2026-07-06T12:00:00.000Z",
+    title: "old", externalId: "sig:test:old",
+  });
+  recordSignal({
+    source: "test", kind: "k_bf", symbol: "TSTA", direction: "long",
+    firedAt: new Date().toISOString(), knownAt: new Date().toISOString(),
+    title: "fresh", externalId: "sig:test:fresh",
+  });
+  const bf = (id: string) =>
+    (db.prepare("select backfilled from signals where externalId=?").get(id) as { backfilled: number }).backfilled;
+  assert.equal(bf("sig:test:old"), 1);
+  assert.equal(bf("sig:test:fresh"), 0);
+});
+
+check("computeOutcomes grades elapsed horizons only, and only once", () => {
+  // Real series in marks for TSTB and the SPY benchmark: 30 bars each.
+  const closes = Array.from({ length: 30 }, (_, i) => 100 + i);
+  storeBars(symbolSeriesId("TSTB"), mkBars("2026-05-04", closes).map((b) => ({ occurredAt: b.at, close: b.close })));
+  storeBars(symbolSeriesId("SPY"), mkBars("2026-05-04", closes.map((c) => c * 2)).map((b) => ({ occurredAt: b.at, close: b.close })));
+
+  const id = recordSignal({
+    source: "test", kind: "k_out", symbol: "TSTB", direction: "long",
+    firedAt: "2026-05-04T12:00:00.000Z", knownAt: "2026-05-04T12:00:00.000Z",
+    title: "gradeable", externalId: "sig:test:out",
+  })!;
+  computeOutcomes();
+  const horizons = outcomesFor(id).map((o) => o.horizonDays);
+  assert.deepEqual(horizons, [5, 20], "5 and 20 elapsed within 30 bars; 60 still pending");
+
+  const before = outcomesFor(id).map((o) => o.computedAt).join("|");
+  computeOutcomes();
+  assert.equal(outcomesFor(id).map((o) => o.computedAt).join("|"), before, "outcomes are never revised");
+});
+
+check("the scorecard refuses backfilled signals; the studies accept them", () => {
+  // Same symbol/series, one live-collected (override) and one imported.
+  recordSignal({
+    source: "test2", kind: "k_agg", symbol: "TSTB", direction: "long",
+    firedAt: "2026-05-04T12:00:00.000Z", knownAt: "2026-05-04T12:00:00.000Z",
+    title: "live", externalId: "sig:test2:live", backfilled: false,
+  });
+  recordSignal({
+    source: "test2", kind: "k_agg", symbol: "TSTB", direction: "long",
+    firedAt: "2026-05-05T12:00:00.000Z", knownAt: "2026-05-05T12:00:00.000Z",
+    title: "imported", externalId: "sig:test2:imported", backfilled: true,
+  });
+  computeOutcomes();
+
+  const score = aggregateSignals("source", { includeBackfilled: false }).find((g) => g.key === "test2");
+  assert.equal(score?.total, 1, "scorecard sees only the live signal");
+  const study = aggregateSignals("kind", { includeBackfilled: true }).find((g) => g.key === "k_agg");
+  assert.equal(study?.total, 2, "studies see both");
+  // Rising series beats a rising benchmark equally — excess 0 is not a hit; just
+  // assert the hit machinery ran for a directional row.
+  const row = study?.rows.find((r) => r.horizonDays === 5);
+  assert.ok(row && row.hits !== null && row.hitInterval !== null, "directional rows carry a hit rate");
+});
+
+check("a monitor firing lands in the signal feed", () => {
+  const monId = createMonitor({
+    kind: "price_level", symbol: "TSTB", comparator: "above", threshold: 1,
+    label: "test monitor fires",
+  });
+  evaluateMonitors(new Date("2026-06-16T00:00:00.000Z"));
+  const n = (db.prepare("select count(*) as n from signals where source='monitor' and symbol='TSTB'").get() as { n: number }).n;
+  assert.ok(n >= 1, "firing emitted a signal");
+  deleteMonitor(monId);
+});
+
+check("the committed universe list parses and seeds", () => {
+  const symbols = readUniverseFile();
+  assert.ok(symbols.length >= 80, `expected a real list, got ${symbols.length}`);
+  assert.ok(symbols.every((s) => /^[A-Z0-9.\-]+$/.test(s)), "tickers only, no comments");
+  const { total } = ensureUniverse();
+  assert.equal(total >= symbols.length, true);
+  const again = ensureUniverse();
+  assert.equal(again.added, 0, "re-seeding adds nothing");
+});
+
+check("reseeding the book keeps market signals and drops book-owned ones", () => {
+  const count = (src: string) =>
+    (db.prepare("select count(*) as n from signals where source=?").get(src) as { n: number }).n;
+  const testBefore = count("test") + count("test2");
+  assert.ok(count("monitor") >= 1 && testBefore >= 1, "both kinds present before reset");
+  resetDb(db);
+  assert.equal(count("monitor"), 0, "monitor signals belong to the book");
+  assert.equal(count("journal"), 0, "journal signals belong to the book");
+  assert.equal(count("test") + count("test2"), testBefore, "market-collected signals survive");
+  const orphans = (
+    db.prepare("select count(*) as n from signal_outcomes where signalId not in (select id from signals)").get() as { n: number }
+  ).n;
+  assert.equal(orphans, 0, "no orphaned outcomes");
+});
+
 db.close();
 closeDb();
 for (const f of [file, `${file}-wal`, `${file}-shm`]) fs.rmSync(f, { force: true });

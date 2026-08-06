@@ -9,6 +9,7 @@ import { syncPrices } from "./ingest/prices";
 import { getSecurity } from "./ingest/securities";
 import { getThesisAt } from "./queries";
 import { createMonitor, evaluateMonitors } from "./monitors";
+import { recordSignal } from "./signals";
 import { aiEnabled, aiLabel, readAgainstThesis } from "./ai";
 import type { Assumption, DecisionType } from "./types";
 import { DECISION_TYPES } from "./types";
@@ -428,6 +429,34 @@ async function recordDecisionImpl(fd: FormData) {
         .get(positionId) as { s: number };
       if (held.s <= 0.0001) {
         db.prepare("update positions set status='closed', closedAt=? where id=?").run(at, positionId);
+      }
+    }
+
+    // Every decision is also a signal — the same sealed, gradeable shape as an
+    // insider buy or an 8-K, so your own judgment lands on the same scorecard.
+    // Demo positions are excluded: their fictional price path cannot be graded
+    // against a real benchmark. A backdated decision is auto-flagged as
+    // backfilled by recordSignal and stays off the live scorecard.
+    if (positionId) {
+      const pos = db
+        .prepare("select ticker, demo from positions where id=?")
+        .get(positionId) as { ticker: string; demo: number };
+      const direction =
+        type === "open" || type === "add" ? "long"
+        : type === "reduce" || type === "exit" || type === "pass" ? "short"
+        : "info";
+      if (pos.demo === 0 && pos.ticker) {
+        recordSignal({
+          source: "journal",
+          kind: `journal_${type}`,
+          symbol: pos.ticker,
+          direction,
+          firedAt: at,
+          knownAt: at,
+          title: `${what}`,
+          detail: why,
+          externalId: `sig:journal:${id}`,
+        });
       }
     }
   })();

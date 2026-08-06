@@ -11,10 +11,12 @@
  */
 import { getDb } from "../src/lib/db";
 import { refreshUniverse, universeSize, needsRefresh } from "../src/lib/ingest/securities";
-import { fetchBars, storeBars, syncPrices } from "../src/lib/ingest/prices";
+import { dedupeSymbolDays, syncPrices } from "../src/lib/ingest/prices";
 import { syncFilings } from "../src/lib/ingest/filings";
+import { ensureUniverse, resolveCiks, listUniverse } from "../src/lib/ingest/universe";
 import { symbolSeriesId, symbolsToTrack } from "../src/lib/correlation-report";
 import { evaluateMonitors } from "../src/lib/monitors";
+import { computeOutcomes, BENCHMARK } from "../src/lib/signals";
 
 const argv = process.argv.slice(2);
 const only = (flag: string) => argv.includes(flag);
@@ -75,20 +77,36 @@ async function main() {
   }
 
   if (wantPrices) {
-    // Real weekly history per *symbol*, kept separate from any position's marks.
-    // This is what the correlation check reads: how two securities move together
-    // is a property of the market, so it applies even to the sample book.
-    const symbols = symbolsToTrack();
+    // Real daily history per *symbol*, kept separate from any position's marks.
+    // The correlation check samples it weekly; signal grading needs it daily;
+    // both read the same sym_* series. The tracked set is the union of held
+    // tickers, belief proxies, the universe, and the benchmark.
+    const { added, total } = ensureUniverse();
+    resolveCiks();
+    console.log(`universe: ${total} tracked symbols${added ? ` (+${added} new from the list)` : ""}`);
+
+    const symbols = [
+      ...new Set([BENCHMARK, ...symbolsToTrack(), ...listUniverse().map((u) => u.symbol)]),
+    ];
+    const recent = new Date(Date.now() - 90 * 86_400_000).toISOString();
+    const dailyCount = db.prepare(
+      "select count(*) as n from marks where positionId=? and occurredAt>=?"
+    );
     for (const sym of symbols) {
       process.stdout.write(`series: ${sym.padEnd(8)} `);
       try {
-        const bars = await fetchBars(sym, "2y", "1wk");
-        const stored = storeBars(symbolSeriesId(sym), bars);
-        console.log(`${String(stored).padStart(4)} weekly bars`);
+        const seriesId = symbolSeriesId(sym);
+        // A series with fewer than ~40 marks in 90 days is weekly-only or new —
+        // backfill it to daily once; after that a cheap top-up suffices.
+        const sparse = (dailyCount.get(seriesId, recent) as { n: number }).n < 40;
+        const { stored, range } = await syncPrices(seriesId, sym, { full: full || sparse });
+        console.log(`${String(stored).padStart(4)} bars (${range})`);
       } catch (err) {
         console.log(`skipped — ${String(err).slice(0, 80)}`);
       }
     }
+    const purged = dedupeSymbolDays();
+    if (purged > 0) console.log(`series: purged ${purged} stale duplicate-date bars`);
   }
 
   if (wantFilings) {
@@ -114,7 +132,7 @@ async function main() {
     }
   }
 
-  // Monitors run last: they read the series that were just refreshed.
+  // Monitors run after prices: they read the series that were just refreshed.
   const transitions = evaluateMonitors();
   if (transitions.length === 0) {
     console.log("\nmonitors: no state changes");
@@ -126,6 +144,13 @@ async function main() {
       );
     }
   }
+
+  // Grade signals whose horizons have now fully elapsed. Append-only: an
+  // existing outcome is never revisited, a pending one writes nothing.
+  const graded = computeOutcomes();
+  console.log(
+    `outcomes: ${graded.graded} newly graded, ${graded.pending} awaiting their horizon, ${graded.ungraded} ungradeable`
+  );
 
   const runs = db
     .prepare("select source, ok, note from ingest_runs order by startedAt desc limit 5")

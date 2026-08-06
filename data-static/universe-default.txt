@@ -1,0 +1,121 @@
+# The default tracked universe: ~100 liquid US large caps across sectors.
+# One ticker per line; lines starting with # are ignored. Edit freely — the
+# ingest picks up additions on its next run. Your own positions are always
+# tracked regardless of this list.
+#
+# Technology
+AAPL
+MSFT
+NVDA
+AVGO
+ORCL
+CRM
+ADBE
+AMD
+INTC
+QCOM
+TXN
+MU
+AMAT
+NOW
+PANW
+# Communication / Internet
+GOOGL
+META
+NFLX
+DIS
+CMCSA
+TMUS
+VZ
+T
+# Consumer discretionary
+AMZN
+TSLA
+HD
+MCD
+NKE
+SBUX
+LOW
+TJX
+BKNG
+GM
+F
+# Consumer staples
+WMT
+COST
+PG
+KO
+PEP
+PM
+MDLZ
+CL
+TGT
+# Financials
+BRK-B
+JPM
+V
+MA
+BAC
+WFC
+GS
+MS
+BLK
+SCHW
+AXP
+C
+# Health care
+LLY
+UNH
+JNJ
+ABBV
+MRK
+TMO
+ABT
+PFE
+AMGN
+ISRG
+CVS
+GILD
+MDT
+BMY
+# Industrials
+CAT
+GE
+HON
+UNP
+BA
+DE
+LMT
+RTX
+UPS
+ETN
+# Energy
+XOM
+CVX
+COP
+SLB
+EOG
+OXY
+# Materials
+LIN
+FCX
+NEM
+DOW
+# Utilities & power
+NEE
+DUK
+SO
+CEG
+VST
+# Real estate
+PLD
+AMT
+DLR
+O
+# Payments / software infra
+INTU
+PYPL
+SQ
+SHOP
+UBER
+ABNB
