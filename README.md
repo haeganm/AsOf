@@ -21,6 +21,8 @@ npm run dev          # http://localhost:3000 — seeds a demo book on first run
 
 **Beliefs reveal what the book is really betting on.** Positions link to underlying risk drivers, so a chip designer, a nuclear utility, a copper miner and a data-centre REIT show up as what they are — largely one bet expressed four ways. A sector chart cannot show you that.
 
+**It answers back while you are deciding, not after.** Choose a position and an action on the decision form and AsOf tells you what your own record says about that combination before you have written a word: the rule you wrote for this position, your base rate for that action, anything currently firing, and a catalyst you already have a plan for. Choosing "hold" on a position whose exit condition is already satisfied says so, and quotes the sentence. Rules only, no model, and nothing that tells you what to do.
+
 **Falsifiers can fire on their own.** A condition written as prose waits for you to notice it. Bind it to something observable — a price level, a drawdown from a window high, a move in the 10-year yield or copper, a date going by — and it watches itself. When one crosses, it writes an ordinary piece of evidence against the assumption it speaks for, carrying the sentence you wrote about what crossing would mean. That shape is deliberate: the timeline, the attention queue and the "not revisited since" logic all work on it without knowing monitors exist. Only a change of state is recorded, so a condition that stays met stays quiet.
 
 **And then the tape checks your work.** The belief matrix is your *model* of what connects your positions. Beside it, AsOf computes the realised weekly-return correlation between the same holdings and asks where the two disagree: a belief you declared that the prices never showed, two holdings moving together for a reason you never wrote down, or a stated macro exposure that is not visible at all. On the sample book it confirms the data-centre cluster and refutes one line of a thesis — DLR describes itself as "a levered short on long rates" while correlating about −0.05 with the 10-year yield over two years. Correlation is read from real prices for the symbol rather than from your own fills, because how two securities move together is a property of the market, not of your execution. Findings are withheld below 40 shared weeks rather than hedged.
@@ -84,6 +86,29 @@ Neither suite touches the network. `test:ingest` runs against trimmed real respo
 The seeded portfolio is fictional — a concentrated long-only book with a nuclear utility, a copper miner, a data-centre REIT and a chip designer that turn out to be one position on data-centre capex; a consumer name with evidence sitting against an unreviewed assumption; a closed position whose postmortem concludes the process held and the outcome did not; and an idea that was passed on, looked wrong for four months, then looked right.
 
 Tickers are real, everything else is invented, and prices are illustrative rather than quotes. Dates are relative to when you seed, so the demo never goes stale.
+
+## Keeping it current
+
+Monitors are only honest if something checks them. On Windows:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\win\install-task.ps1
+```
+
+That registers a daily task (plus one shortly after logon, so a machine that was off catches up) which refreshes prices and filings and then evaluates every monitor. It runs through a VBScript launcher so no console window ever appears, and appends to `data/ingest.log`. Remove it with `-Remove`.
+
+## The optional model
+
+One feature uses a language model: reading a pasted document against a thesis and saying which assumptions it actually speaks to. Every number, monitor, correlation and pattern in AsOf is computed without one and is unaffected by whether it is configured.
+
+Put a key in `.env.local`, which is gitignored:
+
+```
+ANTHROPIC_API_KEY=sk-ant-...        # or OPENAI_API_KEY=sk-...
+ASOF_AI_MODEL=anthropic:claude-sonnet-4-5   # optional
+```
+
+Without a key the feature is hidden and everything else is unchanged. Naming a provider whose key is missing disables it rather than silently using the other one. What gets sent is the text you paste, your thesis summary and your assumption list — not your holdings, returns or decisions — and only when you press the button. Anything it writes is marked as drafted, is editable, and a returned assumption id that isn't in your thesis is discarded rather than stored.
 
 ## Notes
 
