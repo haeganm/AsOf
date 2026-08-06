@@ -10,7 +10,8 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { getJson } from "../src/lib/ingest/http";
+import { getJson, getText } from "../src/lib/ingest/http";
+import { ownershipXmlName } from "../src/lib/ingest/insiders";
 
 const DIR = path.join(process.cwd(), "scripts", "fixtures");
 fs.mkdirSync(DIR, { recursive: true });
@@ -86,9 +87,26 @@ async function main() {
         filingDate: (r.filingDate ?? []).slice(0, keep),
         reportDate: (r.reportDate ?? []).slice(0, keep),
         primaryDocDescription: (r.primaryDocDescription ?? []).slice(0, keep),
+        acceptanceDateTime: (r.acceptanceDateTime ?? []).slice(0, keep),
+        items: (r.items ?? []).slice(0, keep),
       },
     },
   });
+
+  // 5. One real Form 4: the filing directory index and its ownership XML.
+  //    NVDA's most recent Form 4 (any will do — the schema is what matters).
+  const form = (r.form ?? []) as string[];
+  const f4 = form.findIndex((f: string) => f === "4");
+  if (f4 === -1) throw new Error("no Form 4 in NVDA's recent filings");
+  const accession = r.accessionNumber[f4] as string;
+  const dir = `https://www.sec.gov/Archives/edgar/data/1045810/${accession.replace(/-/g, "")}`;
+  const index = await getJson<any>(`${dir}/index.json`);
+  write("sec-form4-index.json", index);
+  const xmlName = ownershipXmlName(index);
+  if (!xmlName) throw new Error("no ownership XML found in the Form 4 directory");
+  const xml = await getText(`${dir}/${xmlName}`, { accept: "application/xml" });
+  fs.writeFileSync(path.join(DIR, "sec-form4.xml"), xml);
+  console.log(`  ${"sec-form4.xml".padEnd(28)} ${(xml.length / 1024).toFixed(1)} KB (${accession})`);
 
   console.log("\ndone. These are checked in; the tests never hit the network.");
 }

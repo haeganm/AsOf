@@ -211,6 +211,8 @@ check("the median ignores one late filing rather than being dragged by it", () =
     filedAt: `${filed}T12:00:00.000Z`,
     periodEnd: null,
     description: null,
+    acceptedAt: `${filed}T12:00:00.000Z`,
+    items: [] as string[],
   });
   // Four ~91-day gaps and one 200-day outlier.
   const est = estimateNextReport([
@@ -230,6 +232,8 @@ check("too little history yields no estimate rather than a guess", () => {
     filedAt: `${filed}T12:00:00.000Z`,
     periodEnd: null,
     description: null,
+    acceptedAt: `${filed}T12:00:00.000Z`,
+    items: [] as string[],
   });
   assert.equal(estimateNextReport([]), null);
   assert.equal(estimateNextReport([mk("2026-01-01"), mk("2025-10-01")]), null);
@@ -267,7 +271,14 @@ check("an estimated event is flagged as an estimate and upserted, not duplicated
 });
 
 check("filing descriptions read as English", () => {
-  const at = { accession: "a", filedAt: "2026-01-01T00:00:00.000Z", periodEnd: "2025-12-31", description: null };
+  const at = {
+    accession: "a",
+    filedAt: "2026-01-01T00:00:00.000Z",
+    periodEnd: "2025-12-31",
+    description: null,
+    acceptedAt: "2026-01-01T00:00:00.000Z",
+    items: [] as string[],
+  };
   assert.match(describeFiling({ ...at, form: "10-Q" }), /Quarterly report/);
   assert.match(describeFiling({ ...at, form: "10-K" }), /Annual report/);
   assert.match(describeFiling({ ...at, form: "8-K" }), /Material event/);
@@ -874,6 +885,167 @@ check("the committed universe list parses and seeds", () => {
   assert.equal(again.added, 0, "re-seeding adds nothing");
 });
 
+// ── insider signals (Form 4) ──────────────────────────────────────────────
+
+console.log("\ninsider signals:");
+
+import {
+  parseForm4,
+  ownershipXmlName,
+  registerBuyFiling,
+  syncInsiders,
+  LARGE_BUY_USD,
+  MIN_BUY_USD,
+} from "../src/lib/ingest/insiders";
+
+check("a real Form 4 parses, and a gift (code G) is not a buy", () => {
+  const xml = fs.readFileSync(path.join(FIX, "sec-form4.xml"), "utf8");
+  const f = parseForm4(xml);
+  assert.equal(f.symbol, "NVDA");
+  assert.equal(f.issuerName, "NVIDIA CORP");
+  assert.equal(f.owners.length, 1);
+  assert.equal(f.owners[0].name, "COXE TENCH");
+  assert.deepEqual(f.owners[0].roles, ["director"]);
+  assert.equal(f.buys.length, 0, "code G (gift) must not count as an open-market buy");
+});
+
+check("the ownership XML is found and rendered views are skipped", () => {
+  const index = load<{ directory?: { item?: Array<{ name?: string }> } }>("sec-form4-index.json");
+  const name = ownershipXmlName(index);
+  assert.ok(name && name.endsWith(".xml") && !/^xsl/i.test(name), `got ${name}`);
+});
+
+/** A minimal synthetic Form 4 in the real schema shape. */
+function form4(opts: { owner: string; rows: Array<{ code: string; date: string; shares: number; price?: number }> }) {
+  const rows = opts.rows
+    .map(
+      (r) => `<nonDerivativeTransaction>
+        <transactionDate><value>${r.date}</value></transactionDate>
+        <transactionCoding><transactionCode>${r.code}</transactionCode></transactionCoding>
+        <transactionAmounts>
+          <transactionShares><value>${r.shares}</value></transactionShares>
+          <transactionPricePerShare>${r.price !== undefined ? `<value>${r.price}</value>` : `<footnoteId id="F1"/>`}</transactionPricePerShare>
+        </transactionAmounts>
+      </nonDerivativeTransaction>`
+    )
+    .join("");
+  return parseForm4(`<ownershipDocument>
+    <issuer><issuerTradingSymbol>TSTC</issuerTradingSymbol><issuerName>Test Corp</issuerName></issuer>
+    <reportingOwner><reportingOwnerId><rptOwnerName>${opts.owner}</rptOwnerName></reportingOwnerId>
+      <reportingOwnerRelationship><isDirector>1</isDirector></reportingOwnerRelationship></reportingOwner>
+    <nonDerivativeTable>${rows}</nonDerivativeTable>
+  </ownershipDocument>`);
+}
+
+check("split lots aggregate before the threshold, and footnoted lots carry no notional", () => {
+  const f = form4({
+    owner: "DOE JANE",
+    rows: [
+      { code: "P", date: "2026-06-01", shares: 300, price: 50 }, // $15k
+      { code: "P", date: "2026-06-01", shares: 300, price: 55 }, // $16.5k — together $31.5k ≥ MIN
+      { code: "P", date: "2026-06-01", shares: 100 }, // footnote-only price: shares counted, no notional
+      { code: "S", date: "2026-06-01", shares: 900, price: 50 }, // a sale never counts
+    ],
+  });
+  assert.equal(f.buys.length, 1, "one aggregated buy per date");
+  const b = f.buys[0];
+  assert.equal(b.shares, 700);
+  assert.equal(b.pricedShares, 600);
+  assert.ok(Math.abs(b.notional - 31_500) < 1e-6, `notional ${b.notional}`);
+  assert.ok(b.notional >= MIN_BUY_USD, "aggregate clears the floor thirty split fills would each miss");
+});
+
+check("a large buy emits one signal; re-registering is a no-op", () => {
+  const parsed = form4({
+    owner: "BIGBUYER AL",
+    rows: [{ code: "P", date: "2026-06-02", shares: 3000, price: 100 }], // $300k ≥ LARGE
+  });
+  assert.ok(parsed.buys[0].notional >= LARGE_BUY_USD);
+  const first = registerBuyFiling("TSTC", "acc-large-1", "2026-06-03T10:00:00.000Z", parsed);
+  assert.equal(first.signals, 1);
+  const again = registerBuyFiling("TSTC", "acc-large-1", "2026-06-03T10:00:00.000Z", parsed);
+  assert.equal(again.signals, 0, "externalId dedupe");
+});
+
+check("a second distinct insider completes a cluster — once, and growth does not re-mint it", () => {
+  // BIGBUYER AL bought 6/2 (above). A second owner inside 14 days completes it.
+  const two = registerBuyFiling(
+    "TSTC",
+    "acc-c2",
+    "2026-06-05T10:00:00.000Z",
+    form4({ owner: "SECOND BOB", rows: [{ code: "P", date: "2026-06-04", shares: 600, price: 50 }] })
+  );
+  const clusters = () =>
+    (db.prepare("select count(*) as n from signals where kind='insider_cluster_buy' and symbol='TSTC'").get() as { n: number }).n;
+  assert.equal(two.signals, 1, "the threshold-crossing filing emits the cluster");
+  assert.equal(clusters(), 1);
+
+  // A third owner three days later grows the cluster — no second signal.
+  registerBuyFiling(
+    "TSTC",
+    "acc-c3",
+    "2026-06-08T10:00:00.000Z",
+    form4({ owner: "THIRD CAROL", rows: [{ code: "P", date: "2026-06-07", shares: 600, price: 50 }] })
+  );
+  assert.equal(clusters(), 1, "growth inside the window does not re-mint");
+
+  // Well outside the window, a fresh pair mints a fresh cluster.
+  registerBuyFiling(
+    "TSTC",
+    "acc-c4",
+    "2026-07-20T10:00:00.000Z",
+    form4({ owner: "FOURTH DAN", rows: [{ code: "P", date: "2026-07-18", shares: 600, price: 50 }] })
+  );
+  registerBuyFiling(
+    "TSTC",
+    "acc-c5",
+    "2026-07-25T10:00:00.000Z",
+    form4({ owner: "FIFTH EVE", rows: [{ code: "P", date: "2026-07-24", shares: 600, price: 50 }] })
+  );
+  assert.equal(clusters(), 2, "a new window can cluster again");
+});
+
+const checkAsync = async (label: string, fn: () => Promise<void>) => {
+  try {
+    await fn();
+    checks++;
+    console.log(`  ok  ${label}`);
+  } catch (err) {
+    failures.push(`${label} — ${(err as Error).message}`);
+    console.log(`  FAIL  ${label}\n        ${(err as Error).message}`);
+  }
+};
+
+// tsx compiles this file as CJS, where top-level await is a syntax error — the
+// async tail (and everything after it, including the summary) runs in one IIFE.
+(async () => {
+await checkAsync("first sight of a company seeds the watermark and fetches nothing", async () => {
+  db.prepare(
+    "insert into universe (symbol,cik,name,active,addedAt) values ('TSTW','0000000001','Watermark Co',1,?) on conflict do nothing"
+  ).run(new Date().toISOString());
+  const filings = [
+    { accession: "a1", form: "4", filedAt: "2026-01-05T12:00:00.000Z", periodEnd: null, description: null, acceptedAt: "2026-01-05T13:00:00.000Z", items: [] },
+  ];
+  const r = await syncInsiders("TSTW", "0000000001", filings);
+  assert.equal(r.seeded, true);
+  assert.equal(r.processed, 0, "history is never fetched on first sight");
+  const wm = (db.prepare("select form4Watermark as w from universe where symbol='TSTW'").get() as { w: string | null }).w;
+  assert.ok(wm !== null, "watermark now set");
+  // Second run with nothing newer than the watermark: still nothing to do.
+  const r2 = await syncInsiders("TSTW", "0000000001", filings);
+  assert.equal(r2.seeded, false);
+  assert.equal(r2.processed, 0);
+});
+
+check("submissions now carry acceptance instants and 8-K item codes", () => {
+  const subs = load<SubmissionsResponse>("sec-submissions-NVDA.json");
+  const filings = parseSubmissions(subs);
+  assert.ok(filings.some((f) => f.acceptedAt.includes("T") && !f.acceptedAt.endsWith("T12:00:00.000Z")), "real acceptance instants present");
+  const eightK = filings.find((f) => f.form === "8-K");
+  assert.ok(eightK && eightK.items.length > 0, "8-K items parsed");
+  assert.ok(eightK!.items.every((i) => /^\d+\.\d+$/.test(i)), `item codes look like codes: ${eightK!.items}`);
+});
+
 check("reseeding the book keeps market signals and drops book-owned ones", () => {
   const count = (src: string) =>
     (db.prepare("select count(*) as n from signals where source=?").get(src) as { n: number }).n;
@@ -898,3 +1070,4 @@ if (failures.length) {
   for (const f of failures) console.log(`  - ${f}`);
   process.exit(1);
 }
+})();

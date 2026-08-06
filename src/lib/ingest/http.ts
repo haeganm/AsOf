@@ -38,8 +38,8 @@ export class FetchFailed extends Error {
   }
 }
 
-/** Serialised, rate-limited, retried GET returning parsed JSON. */
-export async function getJson<T>(url: string, opts: { retries?: number } = {}): Promise<T> {
+/** Serialised, rate-limited, retried GET returning the response body as text. */
+export async function getText(url: string, opts: { retries?: number; accept?: string } = {}): Promise<string> {
   const retries = opts.retries ?? 2;
   let lastErr: unknown;
 
@@ -50,7 +50,7 @@ export async function getJson<T>(url: string, opts: { retries?: number } = {}): 
 
     try {
       const res = await fetch(url, {
-        headers: { "User-Agent": userAgent(), Accept: "application/json" },
+        headers: { "User-Agent": userAgent(), Accept: opts.accept ?? "*/*" },
         signal: AbortSignal.timeout(20_000),
       });
       if (!res.ok) {
@@ -60,7 +60,7 @@ export async function getJson<T>(url: string, opts: { retries?: number } = {}): 
         }
         throw new Error(`${res.status} ${res.statusText}`);
       }
-      return (await res.json()) as T;
+      return await res.text();
     } catch (err) {
       lastErr = err;
       if (err instanceof FetchFailed) throw err;
@@ -68,4 +68,9 @@ export async function getJson<T>(url: string, opts: { retries?: number } = {}): 
     }
   }
   throw new FetchFailed(url, 0, `gave up after ${retries + 1} attempts: ${String(lastErr)}`);
+}
+
+/** Serialised, rate-limited, retried GET returning parsed JSON. */
+export async function getJson<T>(url: string, opts: { retries?: number } = {}): Promise<T> {
+  return JSON.parse(await getText(url, { ...opts, accept: "application/json" })) as T;
 }

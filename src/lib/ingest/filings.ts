@@ -23,6 +23,10 @@ export type SubmissionsResponse = {
       filingDate?: string[];
       reportDate?: string[];
       primaryDocDescription?: string[];
+      /** Exact public instant, ISO Z — what an honest knownAt is made of. */
+      acceptanceDateTime?: string[];
+      /** 8-K item codes, comma-separated (e.g. "2.02,9.01"). */
+      items?: string[];
     };
   };
 };
@@ -33,6 +37,9 @@ export interface Filing {
   filedAt: string;
   periodEnd: string | null;
   description: string | null;
+  /** Falls back to midday on the filing date when the feed omits it. */
+  acceptedAt: string;
+  items: string[];
 }
 
 /** Forms worth a line on a timeline. Form 4s are counted, not listed one by one. */
@@ -47,12 +54,15 @@ export function parseSubmissions(data: SubmissionsResponse): Filing[] {
     const form = r.form[i];
     const filed = r.filingDate[i];
     if (!form || !filed) continue;
+    const filedAt = new Date(`${filed}T12:00:00.000Z`).toISOString();
     out.push({
       accession: r.accessionNumber?.[i] ?? `${form}-${filed}-${i}`,
       form,
-      filedAt: new Date(`${filed}T12:00:00.000Z`).toISOString(),
+      filedAt,
       periodEnd: r.reportDate?.[i] || null,
       description: r.primaryDocDescription?.[i] || null,
+      acceptedAt: r.acceptanceDateTime?.[i] || filedAt,
+      items: (r.items?.[i] ?? "").split(",").map((s) => s.trim()).filter(Boolean),
     });
   }
   return out.sort((a, b) => b.filedAt.localeCompare(a.filedAt));

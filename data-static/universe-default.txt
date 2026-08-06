@@ -115,7 +115,7 @@ O
 # Payments / software infra
 INTU
 PYPL
-SQ
+XYZ
 SHOP
 UBER
 ABNB

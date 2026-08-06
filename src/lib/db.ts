@@ -258,6 +258,23 @@ create table if not exists universe (
   addedAt text not null
 );
 
+-- Every qualifying open-market insider buy, one row per (filing, owner). This
+-- is working state for the cluster rule, not a signal feed: most buys never
+-- become a signal, but each may later complete someone else's cluster.
+create table if not exists insider_buys (
+  accession text not null,
+  ownerName text not null,
+  symbol text not null,
+  roles text,
+  shares real not null,
+  avgPrice real,
+  notional real not null,
+  transactionDate text not null,
+  acceptedAt text not null,
+  createdAt text not null,
+  primary key (accession, ownerName)
+);
+
 `;
 
 /** Applied after `migrate`, because some of these index the added columns. */
@@ -290,6 +307,7 @@ create unique index if not exists uq_signals_extid on signals(externalId);
 create index if not exists idx_signals_source on signals(source, knownAt);
 create index if not exists idx_signals_kind on signals(kind, knownAt);
 create index if not exists idx_signals_symbol on signals(symbol, knownAt);
+create index if not exists idx_insider_sym on insider_buys(symbol, transactionDate);
 `;
 
 /**

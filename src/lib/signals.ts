@@ -40,6 +40,8 @@ export const SOURCE_LABEL: Record<string, string> = {
 
 /** Plain-language names for signal kinds; grows with each source. */
 export const KIND_LABEL: Record<string, string> = {
+  insider_buy_large: "Large insider buy",
+  insider_cluster_buy: "Insider cluster buy",
   monitor_price_level: "Monitor: price level crossed",
   monitor_price_change: "Monitor: price move",
   monitor_drawdown: "Monitor: drawdown",
