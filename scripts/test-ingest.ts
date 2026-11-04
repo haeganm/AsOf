@@ -42,6 +42,10 @@ import { aiConfig, aiEnabled, aiLabel } from "../src/lib/ai-config";
 import { closeDb, openDb } from "../src/lib/db";
 
 const FIX = path.join(process.cwd(), "scripts", "fixtures");
+// The day the fixtures were recorded. Anything judged against "now" (is the
+// next report still ahead, how far below its six-month high) runs on this
+// clock, so the checks do not start failing as the calendar moves on.
+const RECORDED_AT = "2026-08-06T21:00:00.000Z";
 const load = <T,>(name: string): T => JSON.parse(fs.readFileSync(path.join(FIX, name), "utf8")) as T;
 
 let checks = 0;
@@ -260,8 +264,8 @@ check("filings become ingested evidence exactly once", () => {
 
 check("an estimated event is flagged as an estimate and upserted, not duplicated", () => {
   const filings = parseSubmissions(load<SubmissionsResponse>("sec-submissions-NVDA.json"));
-  storeFilings("pos_t", "pf", "NVDA", filings);
-  storeFilings("pos_t", "pf", "NVDA", filings);
+  storeFilings("pos_t", "pf", "NVDA", filings, { now: RECORDED_AT });
+  storeFilings("pos_t", "pf", "NVDA", filings, { now: RECORDED_AT });
   const evs = db
     .prepare("select id, estimated, externalId, title from events where positionId='pos_t'")
     .all() as Array<{ estimated: number; externalId: string; title: string }>;
@@ -412,11 +416,11 @@ check("a drawdown monitor measures against the window high, and fires below it",
     label: "20% below the six-month high",
   });
   const m = listMonitors().find((x) => x.id === id)!;
-  const { value, describe } = read(m);
+  const { value, describe } = read(m, new Date(RECORDED_AT));
   assert.ok(value !== null && value! <= 0, "a drawdown is zero or negative");
   assert.match(describe, /high of/);
 
-  const transitions = evaluateMonitors();
+  const transitions = evaluateMonitors(new Date(RECORDED_AT));
   const mine = transitions.find((t) => t.monitor.id === id);
   assert.ok(mine, "NKE is well below its six-month high, so this must fire");
   assert.equal(mine!.direction, "fired");
@@ -749,6 +753,20 @@ check("a series that dies before the horizon is ungraded, never guessed", () => 
   const dead = symBars.slice(0, 3); // last print 7/8
   const bench = mkBars("2026-07-06", Array.from({ length: 40 }, (_, i) => 200 + i));
   assert.equal(grade(dead, bench, "2026-07-06T12:00:00.000Z", 20).status, "ungraded");
+});
+
+check("a signal older than the price history is ungraded, not entered years late", () => {
+  // The live defect: 8-K signals from 2013 were "entered" at the first bar of a
+  // 5-year backfill (2021) and graded against prices years after the fact.
+  const bench = mkBars("2026-07-06", Array.from({ length: 40 }, (_, i) => 200 + i));
+  const g = grade(symBars, bench, "2013-02-05T21:30:00.000Z", 5);
+  assert.equal(g.status, "ungraded");
+});
+
+check("a signal from just before the history starts still enters at its first close", () => {
+  // Friday evening 7/3, history starts Monday 7/6: that close is the real entry.
+  const bench = mkBars("2026-07-06", [200, 200, 200, 200, 200, 210, 210, 210, 210, 210]);
+  assert.equal(grade(symBars, bench, "2026-07-03T21:30:00.000Z", 5).status, "graded");
 });
 
 check("a week-close bar stamped at week start cannot poison the entry price", () => {

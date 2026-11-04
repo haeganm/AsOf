@@ -16,7 +16,8 @@
  *    two endpoint dates — the entry date, and the date N benchmark trading days
  *    later — so a halted day on one leg cannot desynchronise the comparison.
  *
- * 3. Nothing is graded early, and a dead series is not silently dropped. A
+ * 3. Nothing is graded early, nothing older than the price history is graded
+ *    at all, and a dead series is not silently dropped. A
  *    horizon that has not fully elapsed is `pending`; a symbol whose series
  *    ends well before the exit date (delisting, acquisition) is `ungraded` and
  *    is COUNTED as such wherever grades are shown.
@@ -113,6 +114,14 @@ export function grade(
   }
 
   const entryDate = tradingDate(entry.at);
+
+  // A signal older than the price history has no real entry: entryBar would
+  // hand back the series' first bar, years after the fact. Weekends and
+  // holidays stay inside the stale limit, so a signal from just before the
+  // history starts still enters at its first close.
+  if (daysBetween(tradingDate(knownAt), entryDate) > STALE_EXIT_DAYS) {
+    return { status: "ungraded", reason: `the signal predates the price history, which starts ${entryDate}` };
+  }
 
   // Benchmark leg anchors at its first bar on or after the entry date; the exit
   // date is N benchmark trading days later — the shared calendar for both legs.

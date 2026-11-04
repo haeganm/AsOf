@@ -1,5 +1,7 @@
 # AsOf
 
+[![CI](https://github.com/haeganm/AsOf/actions/workflows/ci.yml/badge.svg)](https://github.com/haeganm/AsOf/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 **A self-grading market intelligence engine.** AsOf collects signals — insider buys from SEC filings, company events, your own monitors and decisions, alerts from any tool you already run — seals each one at the moment it became publicly knowable, and then grades it: what did the stock actually do afterwards, compared to just holding the index?
 
 Three questions, three pages:
@@ -27,7 +29,7 @@ Every graded number in AsOf survives four rules, because a self-grading system t
 3. **Imported history can never prove an edge.** Backfilled signals (loaded after the fact) power the Studies — sample size is their whole point — but are permanently excluded from the Scorecard, which grades only what was collected live and sealed before the outcome existed.
 4. **Withheld, not hedged.** Below a minimum sample, a row is greyed out and says it is collecting — no precise-looking number on seven data points. A standing note explains that with many sources and horizons, some rows will look good by luck.
 
-Grades are written once, when the horizon has fully elapsed, and never revised. A symbol that stopped trading before its horizon is counted as "ungraded", not silently dropped.
+Grades are written once, when the horizon has fully elapsed, and never revised. A symbol that stopped trading before its horizon, or a signal older than the available price history, is counted as "ungraded", not silently dropped or entered years late.
 
 ## Where signals come from
 

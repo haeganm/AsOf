@@ -142,10 +142,11 @@ export function storeFilings(
   portfolioId: string,
   ticker: string,
   filings: Filing[],
-  opts: { since?: string; limit?: number } = {}
+  opts: { since?: string; limit?: number; now?: string } = {}
 ): { evidence: number; estimated: ReportEstimate | null } {
   const db = getDb();
-  const since = opts.since ?? new Date(Date.now() - 365 * 86_400_000).toISOString();
+  const now = opts.now ?? nowIso();
+  const since = opts.since ?? new Date(Date.parse(now) - 365 * 86_400_000).toISOString();
   const material = filings
     .filter((f) => MATERIAL.has(f.form) && f.filedAt >= since)
     .slice(0, opts.limit ?? 40);
@@ -174,7 +175,7 @@ export function storeFilings(
   })();
 
   const estimate = estimateNextReport(filings);
-  if (estimate && estimate.nextAt > nowIso()) {
+  if (estimate && estimate.nextAt > now) {
     db.prepare(
       `insert into events (id,portfolioId,positionId,title,kind,occurredAt,knownAt,status,marketExpects,
          iExpect,keyVariables,scenarios,outcome,resolvedAt,createdAt,estimated,externalId)
