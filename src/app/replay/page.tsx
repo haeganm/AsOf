@@ -141,7 +141,7 @@ export default function ReplayIndex() {
                   <p className="mt-4 border-t border-rule pt-3 text-[12px] leading-relaxed text-ink-2">
                     <span className="label mb-1 block">Ahead of you</span>
                     {s.pending[0].title} —{" "}
-                    {relativeDays(s.pending[0].occurredAt, s.d.occurredAt).replace("in ", "in ")}
+                    {relativeDays(s.pending[0].occurredAt, s.d.occurredAt)}
                   </p>
                 )}
                 {s.attempts.length > 0 && (
